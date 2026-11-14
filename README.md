@@ -1,12 +1,10 @@
 # Installation tutorial
 
-1. Use a computer or VPS with Node.js 22+ and Codex CLI already installed.
-2. On this repository page, click **Code → Download ZIP**.
-3. Extract the ZIP and open a terminal in the extracted folder containing `install.mjs`.
-4. Run:
+1. Use a computer or VPS with Node.js 22+, Codex CLI, Bash and curl already installed.
+2. Open a terminal and run:
 
    ```sh
-   node install.mjs
+   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.0.0/install.sh | bash
    ```
 
 The installer copies the proxy file and prints its location. It preserves your existing settings and credentials. It does not install Codex or Node.js, ask for a key, configure Codex, or start the proxy.

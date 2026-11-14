@@ -219,7 +219,9 @@ node agentrouter-coding-proxy.mjs --self-test
 
 Nine focused tests cover installation preservation, backups, linked-target rejection, relay-content identity, history transformation, authorization forwarding, and unchanged upstream error streams. The original relay's SHA-256 is `ef70f888ec9be06d4f5064f73cbf17f04a7bb8b6ca1e0c50462ae23cdd331c29`.
 
-The curl installation was checked on Linux in an isolated data directory. Native Windows/macOS execution and live provider inference were not verified for this release.
+The curl installation was checked on Linux in an isolated data directory. On 2026-11-14, the exact downloaded `v1.0.0` relay completed a real Codex CLI 0.169.0 request with `gpt-6.1-sol`, returning `PROXY_OK` in 4.03 seconds with no errors. This check used a temporary port and isolated Codex configuration, with no custom model catalog or changes to the running proxy.
+
+That single no-tools turn verifies connectivity, authorization, and streamed completion for the tested account/model. Native Windows/macOS execution, live tool use, long conversations, and every Azure error remain unverified.
 
 - [Codex configuration reference](https://developers.openai.com/codex/config-reference/)
 - [Codex advanced configuration](https://developers.openai.com/codex/config-advanced/)

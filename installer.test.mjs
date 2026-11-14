@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, stat, symlink, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installOnly, appDirectory, writePrivate } from './install.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { installOnly, installAssistant, appDirectory, writePrivate } from './install.mjs';
 
 async function directory(t) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'agentrouter-install-only-'));
@@ -56,3 +58,40 @@ test('installation directories honor explicit user data roots without changing t
   assert.deepEqual(env, { XDG_DATA_HOME: '/fixture/data', CODEX_HOME: '/fixture/codex' });
 });
 
+test('assistant installation copies its complete runtime, preserves settings and creates a runnable command', async t => {
+  const root = await directory(t), app = join(root, "app with ' and $ and `"), bin = join(root, 'bin');
+  await mkdir(app);
+  await writeFile(join(app, 'settings.json'), '{"existing":true}');
+  const result = await installAssistant({ app, bin });
+  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
+  for (const file of files) assert.equal(await readFile(join(app, file), 'utf8'), await readFile(new URL(file, import.meta.url), 'utf8'));
+  assert.equal(await readFile(join(app, 'settings.json'), 'utf8'), '{"existing":true}');
+  await installAssistant({ app, bin });
+  assert(!(await readdir(app)).some(file => file.includes('agentrouter-backup-')));
+  if (process.platform !== 'win32') {
+    assert.equal((await stat(result.commandPath)).mode & 0o777, 0o700);
+    const { stdout } = await promisify(execFile)(result.commandPath, ['help'], { timeout: 10000 });
+    assert.match(stdout, /ag (help|start|setup)/);
+    assert.deepEqual(await readdir(bin), ['ag']);
+  } else assert.match(await readFile(result.commandPath, 'utf8'), /DisableDelayedExpansion/);
+});
+
+test('assistant installation rejects unrelated commands and linked runtime files before replacement', async t => {
+  const root = await directory(t), app = join(root, 'app'), bin = join(root, 'bin');
+  await mkdir(bin);
+  const commandPath = process.platform === 'win32' ? join(app, 'ag.cmd') : join(bin, 'ag');
+  await mkdir(app);
+  await writeFile(commandPath, 'existing unrelated command');
+  await assert.rejects(installAssistant({ app, bin }), /unrelated ag command/);
+  assert.equal(await readFile(commandPath, 'utf8'), 'existing unrelated command');
+  assert(!(await readdir(app)).includes('ag.mjs'));
+  await rm(commandPath);
+  if (process.platform !== 'win32') {
+    const outside = join(root, 'outside');
+    await writeFile(outside, 'keep');
+    await symlink(outside, join(app, 'ag-proxy.mjs'));
+    await assert.rejects(installAssistant({ app, bin }), /linked/);
+    assert.equal(await readFile(outside, 'utf8'), 'keep');
+    assert(!(await readdir(app)).includes('ag.mjs'));
+  }
+});

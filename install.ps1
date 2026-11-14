@@ -1,6 +1,8 @@
+param([switch]$RelayOnly)
+
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$site = 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.0.0'
+$site = 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0'
 $appRoot = Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay'
 $workDir = Join-Path ([IO.Path]::GetTempPath()) ('agentrouter-install-' + [Guid]::NewGuid().ToString('N'))
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -30,11 +32,13 @@ try {
     if (-not $nodeReady) { throw 'Node.js 22+ is required. Install it first, then rerun this proxy installer. No proxy, client or runtime was installed.' }
     Initialize-PrivateDirectory $workDir
     Initialize-PrivateDirectory $appRoot
-    foreach ($file in @('install.mjs', 'agentrouter-coding-proxy.mjs')) {
+    foreach ($file in @('install.mjs', 'ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'agentrouter-coding-proxy.mjs')) {
         Invoke-WebRequest -UseBasicParsing "$site/$file" -OutFile (Join-Path $workDir $file)
     }
-    & $nodeBin (Join-Path $workDir 'install.mjs')
-    if ($LASTEXITCODE -ne 0) { throw 'Codex AgentRouter relay installation did not finish. Follow the message above and retry.' }
+    $nodeArgs = @((Join-Path $workDir 'install.mjs'))
+    if ($RelayOnly) { $nodeArgs += '--relay-only' }
+    & $nodeBin @nodeArgs
+    if ($LASTEXITCODE -ne 0) { throw 'AgentRouter proxy installation did not finish. Follow the message above and retry.' }
 } finally {
     if (Test-Path -LiteralPath $workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force }
 }

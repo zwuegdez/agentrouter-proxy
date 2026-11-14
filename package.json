@@ -1,0 +1,11 @@
+{
+  "name": "agentrouter-proxy",
+  "version": "1.1.0",
+  "description": "Local proxy and setup assistant for Codex CLI, Claude Code and OpenCode",
+  "type": "module",
+  "bin": { "ag": "ag.mjs" },
+  "engines": { "node": ">=22" },
+  "files": ["ag.mjs", "ag-clients.mjs", "ag-proxy.mjs", "install.mjs", "install.sh", "install.ps1", "agentrouter-coding-proxy.mjs"],
+  "scripts": { "test": "node --test" },
+  "repository": { "type": "git", "url": "https://github.com/zwuegdez/agentrouter-proxy.git" }
+}

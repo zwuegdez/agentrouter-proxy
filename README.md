@@ -1,5 +1,139 @@
 # Installation and usage guide
 
+`ag` starts a local proxy for **Codex CLI, Claude Code, and OpenCode**. Choose an existing client setup, guided setup with an endpoint and API key, or your saved setup. The proxy removes stale Responses references that can cause AgentRouter's Azure resource error.
+
+## Install and use ag
+
+Requires **Node.js 22+**, a compatible provider endpoint, API key, and model. Each client uses its own protocol: Codex requires Responses, Claude requires Messages, and OpenCode requires Chat Completions. The proxy forwards those protocols; your endpoint must support the chosen client.
+
+### Linux, macOS, or VPS: curl
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.sh | bash
+ag help
+ag
+```
+
+The installer copies the files and prints the command path. It starts no process. If `ag` is not on PATH, run:
+
+```bash
+"$HOME/.local/bin/ag" help
+"$HOME/.local/bin/ag"
+```
+
+Add `~/.local/bin` to your shell's PATH to use `ag` from any folder. For a custom bin directory, set `AG_BIN_DIR` when running the installer and use its printed path.
+
+To inspect the installer before running it:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.sh -o install.sh
+cat install.sh
+bash install.sh
+```
+
+### Windows: PowerShell with curl
+
+```powershell
+$installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+try {
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.ps1' -o $installer
+    if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
+    & $installer
+} finally {
+    Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+}
+& (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') help
+& (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd')
+```
+
+Add `%LOCALAPPDATA%\AgentRouterCodexRelay` to your user PATH to use `ag help`. If your script policy blocks the installer, use the ZIP or npm method.
+
+### ZIP, Git, or npm
+
+Download the [v1.1.0 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.1.0.zip), extract it, open its folder in a terminal, and run `node install.mjs`. You can also use `node ag.mjs help` directly from that folder.
+
+With Git installed:
+
+```sh
+git clone --branch v1.1.0 --depth 1 https://github.com/zwuegdez/agentrouter-proxy.git
+cd agentrouter-proxy
+node install.mjs
+ag help
+```
+
+To install the command with npm from GitHub:
+
+```sh
+npm install --global github:zwuegdez/agentrouter-proxy#v1.1.0
+ag help
+ag
+```
+
+This is a GitHub installation, not an npm registry release. npm also needs Git for this method. The client packages are installed separately, only if you accept the setup prompt.
+
+### Choose a mode
+
+| Command or menu choice | Behavior |
+| --- | --- |
+| `ag` | Shows all three choices. |
+| **1. Proxy only** | Choose a client and endpoint; keep its existing credentials and model. Prints routing instructions and leaves the proxy running. |
+| **2. Guided setup** or `ag setup` | Choose Codex, Claude, or OpenCode. Detects the selected client, asks before installing it, asks for endpoint/key/model, then asks about saving and starting. |
+| **3. Start saved setup** or `ag start` | Loads the setup you chose to save, starts the proxy, and launches that client. |
+| `ag proxy` | Starts only the proxy with the default AgentRouter endpoint. |
+| `ag help` | Shows commands, configuration location, and limits. |
+
+API-key entry is hidden. You can supply `AG_API_KEY` through your existing environment instead; it is never printed or passed in command arguments. Saving is optional. When declined, the new key stays in memory for that session and existing saved settings remain available.
+
+Saved settings live at `~/.local/share/agentrouter-codex-relay/ag.json` on Unix (`XDG_DATA_HOME` is honored), or `%LOCALAPPDATA%\AgentRouterCodexRelay\ag.json` on Windows. **Saved keys are plaintext**, protected with Unix mode `0600` or Windows ACLs allowing your user, SYSTEM, and Administrators. Replacing a saved setup creates a private `ag.json.agentrouter-backup-*` file containing the old key. Keep or remove those backups deliberately.
+
+Guided launches give the selected client temporary connection settings and a random local token. They preserve existing client configuration files. The proxy supplies your provider key upstream. In proxy-only mode, authorization comes from the existing client; point that client at the displayed local address and run it in a second terminal. Use guided setup if you want automatic session routing.
+
+The default address is `http://127.0.0.1:18766/v1`. It is separate from the original relay's port `18765`. Stop with **Ctrl+C**; a guided session also stops its proxy when the client exits. No service or autostart is registered.
+
+For another endpoint or an occupied port:
+
+```sh
+ag proxy --endpoint https://provider.example/v1 --port 18767
+ag start --port 18767
+```
+
+For Claude proxy-only mode, set `ANTHROPIC_BASE_URL` to the displayed address with the final `/v1` removed. For OpenCode, set the existing provider's `baseURL` to the displayed `/v1` address. Keep the key, model, and provider SDK already working in that client. For Codex, use the provider fields shown in the original relay tutorial below with port **18766**.
+
+### Phone access, troubleshooting, updates, and removal
+
+From a phone, connect to your computer/VPS with an SSH client and run `ag` there. Both client and proxy run on that machine; the proxy remains on loopback. Keep your SSH session open or use a terminal multiplexer you already have.
+
+| Problem | What to do |
+| --- | --- |
+| `ag` not found | Run the printed full path; add its directory to PATH. For npm, check your global npm bin location. |
+| Client missing | Accept its installation prompt, or install the client yourself and reopen the terminal. Declining installs nothing. |
+| No saved setup | Run `ag setup`, or `ag proxy` for an existing client. |
+| Port already in use | Use `ag start --port 18767` or `ag proxy --port 18767`. |
+| HTTP 401/403 | Check provider key and account access. In proxy-only mode, check the key reaches the existing client. |
+| HTTP 402/429 | Check provider budget/quota/rate limits. Failed generations are not automatically retried. |
+| HTTP 502/504 | Check endpoint, DNS and upstream availability; the upstream header deadline is 60 seconds. |
+| Model or API unsupported | Choose a model and endpoint supporting the selected client's protocol. |
+| Key-saving permission error on Windows | Saving requires PowerShell to set a private ACL. Fix the stated permission problem, or decline saving and use a session only. |
+| Existing `ag` command conflict | The installer refuses to overwrite an unrelated command. Choose another bin directory or resolve that command yourself. |
+
+Requests are capped at 32 MiB; an upstream stream idle for 120 seconds is closed. The proxy strips stale references on Responses requests and preserves upstream error bodies. Removing references cannot recover hidden reasoning or fix every Azure, provider, or client error. Proxy-only mode has no independent local token check: keep it on a trusted machine.
+
+To update, run the installer URL for the version you want, or repeat npm installation with that tag. Stop active sessions before updating. The installer preserves client settings and saves backups when replacing changed files.
+
+To remove a curl/ZIP installation, stop it, remove the installed `ag` launcher, then remove the app directory after checking its contents and backups. Undo any routing edits you made for proxy-only mode. For npm use `npm uninstall --global agentrouter-proxy`; saved app settings and backups need separate removal. Client installations are separate.
+
+### Verification
+
+```sh
+node --test
+```
+
+Local tests cover setup consent, key persistence/permissions/backups, validation, installation preservation, executable launchers, forwarding, stale references, streaming, authorization, cancellation, and client session settings. Linux terminal checks verify hidden key entry and declining save/start without writes. Installed Codex CLI and OpenCode completed requests against local mock providers; the previous implementation's Claude check also reached a local mock.
+
+Funded inference through the new assistant, long conversations, and native Windows/macOS execution remain untested. The historical live check below applies to the original `v1.0.0` relay.
+
+## Original Codex relay tutorial (v1.0.0)
+
 This local proxy helps Codex CLI continue conversations when AgentRouter returns **“The requested item was created under a different Azure OpenAI resource.”** It removes stale resource references and forwards the request to AgentRouter.
 
 The installer only copies the proxy. Starting it and connecting Codex are separate manual steps below.
@@ -59,7 +193,7 @@ Use `curl.exe` because `curl` can refer to a PowerShell alias. If your PowerShel
 
 ### Any supported computer: ZIP
 
-1. Download the [versioned source ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.0.0.zip), or select **Code → Download ZIP** on this repository page for the current source.
+1. Download the [versioned source ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.0.0.zip).
 2. Extract the ZIP.
 3. Open a terminal in the extracted folder containing `install.mjs`.
 4. Run:

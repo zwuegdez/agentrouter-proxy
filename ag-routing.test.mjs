@@ -103,3 +103,30 @@ test('catalog shutdown aborts a pending fetch promptly',async()=>{
   const catalog=createCatalog({endpoint:'https://agentrouter.org/v1',apiKey:'x',fetcher:async(url,{signal})=>new Promise((resolve,reject)=>{entered();signal.addEventListener('abort',()=>reject(signal.reason),{once:true});})});
   const refresh=catalog.refresh();refresh.catch(()=>{});await started;await catalog.close();await assert.rejects(refresh,/abort/i);
 });
+
+
+test('unfamiliar releases route every client protocol from metadata without a model-name allowlist',async t=>{
+  const models=[
+    {id:'deepseek-new-release',supported_endpoint_types:['chat']},
+    {id:'qwen-next',endpoints:{'/v1/responses':true,'/v1/messages':false}},
+    {id:'gemini-next',api_types:'openai'},
+    {id:'glm-next',endpoints:[{path:'/v1/messages'}]},
+    {id:'kimi-next',endpoints:[null,{type:'responses'}]},
+    {id:'brand-new-family',supported_endpoint_types:['chat','responses','messages']},
+  ];
+  const observed=[];
+  const upstream=await start(t,http.createServer(async(req,res)=>{
+    const request=await body(req);observed.push({model:request.model,path:req.url});res.setHeader('content-type','application/json');
+    res.end(JSON.stringify(req.url.endsWith('/messages') ? {id:'m',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1}} : req.url.endsWith('/responses') ? {id:'r',output:[{type:'message',content:[{type:'output_text',text:'ok'}]}],usage:{input_tokens:1,output_tokens:1}} : {id:'c',choices:[{message:{content:'ok'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1}}));
+  }));
+  const catalog={refresh:async()=>models,find:async id=>models.find(model=>model.id===id)};
+  const proxy=await start(t,createProxy({endpoint:upstream+'/v1',apiKey:'secret',localBearer:'local',catalog}));
+  for(const model of models)for(const [protocol,path] of [['messages','/v1/messages'],['chat','/v1/chat/completions'],['responses','/v1/responses']]) {
+    const request={model:model.id,...(protocol==='responses' ? {input:'hi'} : {messages:[{role:'user',content:'hi'}],max_tokens:20})};
+    const response=await fetch(proxy+path,{method:'POST',headers:auth,body:JSON.stringify(request)});assert.equal(response.status,200,model.id+' '+protocol);
+    const result=await response.json();assert(!result.error);
+    const candidates=endpointTypes(model),expected=candidates.includes(protocol) ? protocol : candidates[0];
+    assert.equal(observed.at(-1).model,model.id);assert.equal(observed.at(-1).path,'/v1/'+{messages:'messages',chat:'chat/completions',responses:'responses'}[expected]);
+  }
+  assert.deepEqual(endpointTypes({id:'totally-new'}),['chat','responses','messages']);
+});

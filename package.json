@@ -1,6 +1,6 @@
 {
   "name": "agentrouter-proxy",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Local proxy and setup assistant for Codex CLI, Claude Code and OpenCode",
   "type": "module",
   "bin": { "ag": "ag.mjs" },

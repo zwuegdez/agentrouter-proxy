@@ -3,13 +3,15 @@ import { validateEndpoint } from './ag-proxy.mjs';
 export function endpointTypes(model) {
   if (/(?:^|[/:._-])(?:gpt|o[134])(?:[._-]|\d|$)/i.test(model.id)) return ['responses'];
   const raw = model.supported_endpoint_types || model.endpoints || model.api_types;
-  const types = (Array.isArray(raw) ? raw : []).map(value => {
-    const text = String(typeof value === 'object' ? value.type || value.path : value).toLowerCase();
+  const advertised = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : raw && typeof raw === 'object'
+    ? raw.type || raw.path ? [raw] : Object.entries(raw).filter(([,enabled])=>enabled).map(([type])=>type) : [];
+  const types = advertised.map(value => {
+    const text = String(value && typeof value === 'object' ? value.type || value.path || '' : value || '').toLowerCase();
     if (/responses?|openai[-_]response/.test(text)) return 'responses';
     if (/messages|anthropic/.test(text)) return 'messages';
     if (/chat|completions|openai/.test(text)) return 'chat';
   }).filter(Boolean);
-  return [...new Set(types.length ? types : /claude|anthropic/i.test(model.id) ? ['messages', 'responses', 'chat'] : ['chat', 'responses'])];
+  return [...new Set(types.length ? types : /claude|anthropic/i.test(model.id) ? ['messages', 'responses', 'chat'] : ['chat', 'responses', 'messages'])];
 }
 
 export function normalizeModels(body) {

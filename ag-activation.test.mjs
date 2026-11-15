@@ -88,3 +88,18 @@ test('OS service specs restart after failure and keep argument paths quoted; Lin
   await manageService('install',{home,app,script,platform:'linux',env:{},run});await manageService('remove',{home,app,script,platform:'linux',env:{},run});
   assert.deepEqual(calls.map(x=>x[1]),[['--user','daemon-reload'],['--user','enable','--now',linux.file],['--user','disable','--now','agentrouter-proxy.service'],['--user','daemon-reload']]);
 });
+
+
+test('all new model families refresh every client catalog without changing the selected model',async t=>{
+  const home=await root(t),app=join(home,'ag'),env={PATH:''},service=async()=>{},output={write:()=>{}};
+  await activate(setup,{app,home,env,service,fetcher,output});
+  const state=await loadActive(app);
+  const models=['gpt-next','claude-next','deepseek-next','qwen-next','gemini-next','glm-next','kimi-next','unknown-future-family'].map(id=>({id,display_name:id}));
+  await syncClients(state,models,{home,env,version:2});
+  const ids=models.map(model=>model.id);
+  const codex=JSON.parse(await readFile(join(app,'models.json'),'utf8'));assert.deepEqual(codex.models.map(model=>model.slug),ids);
+  const claude=JSON.parse(await readFile(join(home,'.claude','settings.json'),'utf8'));assert.deepEqual(claude.modelPicker.options.map(model=>model.model),ids);assert.deepEqual(claude.availableModels,ids);assert.equal(claude.model,'gpt-next');
+  const opencode=JSON.parse(await readFile(join(home,'.config','opencode','opencode.json'),'utf8'));assert.deepEqual(Object.keys(opencode.providers.ag_proxy.models),ids);
+  const desktop=JSON.parse(await readFile(join(app,'claude-desktop-all-models.json'),'utf8'));assert.deepEqual(desktop.inferenceModels.map(model=>model.name),ids);
+  await deactivate({app,env,service,output});
+});

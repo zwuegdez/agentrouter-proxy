@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.0/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.1/install.sh | bash
 ag setup
 ```
 
@@ -16,14 +16,14 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.0/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.1/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.0 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.0.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.0` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.1 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.1.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.1` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
 
@@ -59,9 +59,9 @@ A client's explicit command-line options, project config, custom config paths, o
 
 ## Models and endpoints
 
-While active, the proxy fetches **only authenticated AgentRouter `/v1/models`**, on startup and every five minutes. No third-party model catalog supplies selectable IDs. New releases appear automatically; removed or disabled models leave the catalog. Existing client pickers may need a reload or restart to display the refreshed list. Catalog metadata is fetched without redirects to avoid sending the key to another host.
+While active, the proxy fetches **only authenticated AgentRouter `/v1/models`**, on startup and every five minutes. No third-party model catalog supplies selectable IDs. New releases from every model family appear in Codex, Claude Code, and OpenCode automatically; removed or disabled models leave the catalog. Existing client pickers may need a reload or restart to display the refreshed list. Catalog metadata is fetched without redirects to avoid sending the key to another host.
 
-GPT models always use upstream **Responses**. Claude models prefer the client's native endpoint when AgentRouter advertises it; otherwise the proxy chooses an advertised compatible endpoint. If endpoint metadata is absent, Claude defaults to Messages, then Responses/Chat as compatible candidates. Other families default to Chat/Responses. New model IDs use these rules without a hardcoded release list.
+GPT models always use upstream **Responses**. Claude models prefer the client's native endpoint when AgentRouter advertises it; otherwise the proxy chooses an advertised compatible endpoint. If endpoint metadata is absent, Claude defaults to Messages, then Responses/Chat as compatible candidates. Every other family, including DeepSeek, Qwen, Gemini, GLM, Kimi, and previously unknown names, uses AgentRouter endpoint metadata; absent metadata it tries compatible Chat, Responses, or Messages endpoints. There is no family allowlist. New model IDs use these rules without a hardcoded release list.
 
 Claude Code speaks Anthropic Messages, and OpenCode's compatible provider speaks Chat Completions. The proxy translates these to Responses for GPT, including text, images, streaming, function tools, and tool-result history. Codex Responses can also translate to native Claude Messages, including Codex custom tool input. Native requests retain provider-specific fields. Translation cannot preserve every provider-specific feature: unsupported content/tools or stop sequences return an explicit error. Custom tool grammars become a string argument and their upstream grammar enforcement is lost. Hidden signed reasoning is not replayed across protocols.
 

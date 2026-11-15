@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { appDirectory, readConfiguration, writePrivate } from './install.mjs';
 import { createProxy, validateEndpoint } from './proxy-server.mjs';
+import { createCatalog } from './model-catalog.mjs';
 import { activate, deactivate, loadActive, runDaemon } from './activation.mjs';
 import { CLIENTS, clientInstalled, installClient, runClient } from './client-integrations.mjs';
 
@@ -46,9 +47,10 @@ export function validateSetup(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid saved setup. Run ag setup.');
   if (!Object.hasOwn(CLIENTS, value.client)) throw new Error('Choose a listed CLI or desktop client.');
   const endpoint = validateEndpoint(value.endpoint).href.replace(/\/$/, '');
-  if (typeof value.apiKey !== 'string' || !value.apiKey || /[\x00-\x20\x7f]/.test(value.apiKey)) throw new Error('Enter an API key without whitespace.');
+  const apiKey = typeof value.apiKey === 'string' ? value.apiKey.trim().replace(/^(['"])(.*)\1$/, '$2').replace(/^Bearer\s+/i, '') : '';
+  if (!apiKey || /[\s\x00-\x1f\x7f]/.test(apiKey)) throw new Error('Enter an API key without whitespace.');
   if (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 200 || /[\x00-\x1f\x7f]/.test(value.model)) throw new Error('Enter a valid model name.');
-  return { client: value.client, endpoint, apiKey: value.apiKey, model: value.model };
+  return { client: value.client, endpoint, apiKey, model: value.model };
 }
 
 export async function loadSetup(file = join(appDirectory(), 'ag.json')) {
@@ -93,7 +95,7 @@ async function chooseClient(ui, env) {
 }
 
 export async function guidedSetup(ui, { env = process.env, file = join(appDirectory(), 'ag.json'), output = process.stdout,
-  installed = clientInstalled, install = installClient } = {}) {
+  installed = clientInstalled, install = installClient, fetcher = fetch } = {}) {
   const client = await chooseClient(ui, env);
   if(CLIENTS[client].desktop)output.write(`Install ${CLIENTS[client].name} from ${CLIENTS[client].download} on your desktop computer, then open it after setup.\n`);
   else if (!installed(client, { env })) {
@@ -104,9 +106,30 @@ export async function guidedSetup(ui, { env = process.env, file = join(appDirect
   }
   const endpoint = await ui.ask(`Upstream endpoint [${DEFAULT_ENDPOINT}]: `) || DEFAULT_ENDPOINT;
   validateEndpoint(endpoint);
-  const apiKey = env.AG_API_KEY || await ui.ask('API key (hidden; Enter to cancel): ', { secret: true });
-  if (!apiKey) throw new Error('Setup cancelled. No API key was saved.');
-  const model = await ui.ask('Model name from your provider: ');
+  let apiKey = env.AG_API_KEY || '', models;
+  if (apiKey) output.write('Using the API key from AG_API_KEY.\n');
+  for (;;) {
+    apiKey ||= await ui.ask('API key (hidden; Enter to cancel): ', { secret: true });
+    if (!apiKey) throw new Error('Setup cancelled. No API key was saved.');
+    try { apiKey = validateSetup({ client, endpoint, apiKey, model: 'setup' }).apiKey; }
+    catch (error) { output.write(error.message + '\n'); apiKey = ''; continue; }
+    const catalog = createCatalog({ endpoint, apiKey, fetcher });
+    try { models = await catalog.refresh(); break; }
+    catch (error) {
+      if (![401, 403].includes(error.status)) throw error;
+      output.write(error.message + '\nPaste a different API key, or press Enter to cancel.\n');
+      apiKey = '';
+    } finally { await catalog.close(); }
+  }
+  if (!models.length) throw new Error('This API key has no available models. Check its model permissions in AgentRouter. No setup was saved.');
+  output.write(`API key accepted. ${models.length} models available.\n`);
+  let model;
+  for (;;) {
+    model = await ui.ask('Model name from your provider: ');
+    if (models.some(value => value.id === model)) break;
+    if (!model) throw new Error('Setup cancelled. No setup was saved.');
+    output.write('That model is unavailable for this key. Choose an exact ID from:\n' + models.map(value => value.id).join('\n') + '\n');
+  }
   const setup = validateSetup({ client, endpoint, apiKey, model });
   const save = await ui.ask('Save this setup, including its API key, in a private plaintext file? [y/N]: ');
   if (/^y(es)?$/i.test(save)) {

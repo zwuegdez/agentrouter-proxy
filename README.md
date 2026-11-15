@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.5/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.6/install.sh | bash
 ag setup
 ```
 
@@ -16,16 +16,18 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.5/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.6/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.5 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.5.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.5` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.6 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.6.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.6` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
+
+Setup checks the API key against the provider's model catalog before asking for a model or saving settings. A rejected key (HTTP 401/403) can be replaced at the hidden prompt; Enter cancels. It reports when `AG_API_KEY` supplies the key, accepts a pasted `Bearer` prefix or surrounding quotes, and checks the model against the returned catalog. Use an AgentRouter API token, not your account password or browser login token.
 
 ## CLI and desktop choices
 
@@ -102,7 +104,7 @@ Saved setup and activation state live in `~/.local/share/agentrouter-codex-relay
 | Saved model unavailable | Select a model accessible to your AgentRouter key and save the setup again. |
 | Service cannot start / occupied port | Check OS service logs; choose `ag activate --port 18767`. |
 | Enabled proxy is down | Run `ag` or `ag start` to start the existing service again. A crashed process normally restarts after five seconds; an AgentRouter outage leaves the service enabled and catalog discovery retries. |
-| HTTP 401/403 | Check key and account access. |
+| HTTP 401/403 | Run `ag setup` to re-enter an AgentRouter API token. Check token permissions and account access; a browser login token or password will not work. An invalid `AG_API_KEY` can be replaced during setup. |
 | HTTP 402/429 | Check provider balance, quota, and rate limits. |
 | HTTP 404 model unavailable | Refresh with `ag models`, reload the client picker, and choose an available model. |
 | HTTP 400 translation error | Use a native compatible endpoint/model or remove the unsupported feature. |

@@ -25,7 +25,13 @@ test('model discovery is authenticated, refreshes new releases, removes unavaila
   assert.deepEqual(endpointTypes({id:'openai/gpt-future',supported_endpoint_types:['anthropic','chat']}),['responses']);
   assert.deepEqual(endpointTypes({id:'claude-future',supported_endpoint_types:['openai-response','anthropic']}),['responses','messages']);
   assert.throws(()=>normalizeModels({data:[{id:'bad\nmodel'}]}));
-  await assert.rejects(createCatalog({endpoint:'https://agentrouter.org',apiKey:'x',fetcher:async()=>new Response('bad',{status:403})}).refresh(),/403/);
+  for (const status of [401, 403, 503]) {
+    const failed=createCatalog({endpoint:'https://agentrouter.org',apiKey:'secret',fetcher:async()=>new Response('secret upstream detail',{status})});
+    await assert.rejects(failed.refresh(),error=>{
+      assert.equal(error.status,status);assert.match(error.message,new RegExp('HTTP '+status));assert(!error.message.includes('secret'));return true;
+    });
+    await failed.close();
+  }
 });
 
 test('Claude GPT requests use Responses including image and tool history; unavailable models never generate',async t=>{

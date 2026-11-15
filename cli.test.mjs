@@ -11,6 +11,7 @@ import { guidedSetup, launchSession, loadSetup, saveSetup, main, clientInstructi
 import { activate, deactivate } from './activation.mjs';
 
 const fixture = { client: 'codex', endpoint: 'https://provider.example/v1', apiKey: 'fixture-key', model: 'fixture-model' };
+const fetcher = async () => new Response(JSON.stringify({ data: [{ id: fixture.model }] }));
 async function directory(t) {
   const root = await mkdtemp(join(tmpdir(), 'ag-assistant-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -55,7 +56,7 @@ test('guided setup installs only on consent, hides key input, and runs without s
   const ui = answers(['2', 'yes', 'https://provider.example/v1', 'fixture-key', 'fixture-model', 'n', '']);
   let present = false;
   const installedClients = [];
-  const result = await guidedSetup(ui, { file: join(root, 'ag.json'), env: { PATH: '' }, output: sink, installed: () => present,
+  const result = await guidedSetup(ui, { file: join(root, 'ag.json'), env: { PATH: '' }, output: sink, fetcher, installed: () => present,
     install: async client => { installedClients.push(client); present = true; } });
   assert.deepEqual(installedClients, ['claude']);
   assert.equal(result.start, true);
@@ -68,12 +69,62 @@ test('guided setup installs only on consent, hides key input, and runs without s
 test('guided setup can save an environment key and decline startup without installing an existing client', async t => {
   const root = await directory(t), file = join(root, 'ag.json'), sink = output();
   const ui = answers(['3', '', 'fixture-model', 'y', 'n']);
-  const result = await guidedSetup(ui, { file, env: { PATH: '', AG_API_KEY: 'fixture-key' }, output: sink, installed: () => true,
+  const result = await guidedSetup(ui, { file, env: { PATH: '', AG_API_KEY: 'fixture-key' }, output: sink, fetcher, installed: () => true,
     install: () => assert.fail('Existing client must not be installed') });
   assert.equal(result.start, false);
   assert.equal((await loadSetup(file)).client, 'opencode');
   assert(!ui.questions.some(item => item.label.startsWith('API key')));
   assert(!sink.value.includes('fixture-key'));
+});
+
+test('setup validates before saving, retries a rejected environment key and lets the user correct an unavailable model', async t => {
+  const root = await directory(t), file = join(root, 'ag.json'), sink = output();
+  const ui = answers(['2', '', '  "Bearer replacement-key"  ', 'missing-model', fixture.model, 'y', 'n']);
+  let calls = 0;
+  const result = await guidedSetup(ui, { file, env: { PATH: '', AG_API_KEY: 'rejected-key' }, output: sink, installed: () => true,
+    fetcher: async (url, options) => {
+      assert.equal(url.href, 'https://agentrouter.org/v1/models');
+      assert.deepEqual(await readdir(root), []);
+      assert(!ui.questions.some(item => item.label.startsWith('Save this setup')));
+      if (++calls === 1) {
+        assert.equal(options.headers.authorization, 'Bearer rejected-key');
+        return new Response('private upstream error', { status: 401 });
+      }
+      assert.equal(options.headers.authorization, 'Bearer replacement-key');
+      return fetcher();
+    } });
+  assert.equal(calls, 2);
+  assert.equal(result.start, false);
+  assert.equal((await loadSetup(file)).apiKey, 'replacement-key');
+  assert.equal(result.setup.model, fixture.model);
+  assert.match(sink.value, /AG_API_KEY/);
+  assert.match(sink.value, /HTTP 401/);
+  assert.match(sink.value, /API key accepted/);
+  assert.match(sink.value, /model is unavailable/);
+  for (const secret of ['rejected-key', 'replacement-key', 'private upstream error']) assert(!sink.value.includes(secret));
+  assert.equal(ui.questions.find(item => item.label.startsWith('API key')).options.secret, true);
+});
+
+test('cancel after rejected authentication preserves a previous setup without asking to save or start', async t => {
+  const root = await directory(t), file = join(root, 'ag.json'), sink = output();
+  await saveSetup(fixture, file);
+  const before = await readFile(file, 'utf8');
+  const ui = answers(['2', '', 'denied-key', '']);
+  await assert.rejects(guidedSetup(ui, { file, env: { PATH: '' }, output: sink, installed: () => true,
+    fetcher: async () => new Response('denied-key', { status: 403 }) }), /Setup cancelled/);
+  assert.equal(await readFile(file, 'utf8'), before);
+  assert.deepEqual(await readdir(root), ['ag.json']);
+  assert(!ui.questions.some(item => /Model name|Save this setup|Start in the background/.test(item.label)));
+  assert.match(sink.value, /HTTP 403/);
+  assert(!sink.value.includes('denied-key'));
+});
+
+test('non-authentication discovery failure does not save or repeatedly request a key', async t => {
+  const root = await directory(t), ui = answers(['2', '', fixture.apiKey]);
+  await assert.rejects(guidedSetup(ui, { file: join(root, 'ag.json'), env: { PATH: '' }, output: output(), installed: () => true,
+    fetcher: async () => new Response('outage', { status: 503 }) }), /HTTP 503/);
+  assert.equal(ui.questions.filter(item => item.label.startsWith('API key')).length, 1);
+  assert.deepEqual(await readdir(root), []);
 });
 
 test('guided launch authenticates through a temporary token and closes the proxy when the client exits', async t => {
@@ -168,7 +219,7 @@ test('every desktop choice is selectable and saved without installing a CLI pack
   const root=await directory(t);
   for(const [number,client] of [[4,'codex-desktop'],[5,'claude-desktop'],[6,'opencode-desktop']]) {
     const ui=answers([String(number),'','fixture-model','y','n']),sink=output(),file=join(root,client+'.json');
-    const result=await guidedSetup(ui,{file,env:{PATH:'',AG_API_KEY:'fixture-key'},output:sink,
+    const result=await guidedSetup(ui,{file,env:{PATH:'',AG_API_KEY:'fixture-key'},output:sink,fetcher,
       installed:()=>assert.fail('Desktop installation must not be inferred from a CLI'),install:()=>assert.fail('Desktop choices must not install npm packages')});
     assert.equal(result.setup.client,client);assert.equal(result.start,false);
     assert.equal((await loadSetup(file)).client,client);

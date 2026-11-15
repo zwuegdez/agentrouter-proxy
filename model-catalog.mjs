@@ -37,7 +37,13 @@ export function createCatalog({ endpoint, apiKey, fetcher = fetch, refreshMs = 3
       if (!force && models && Date.now() - updated < refreshMs) return models;
       pending = (async () => {
         const response = await fetcher(url, { headers: { authorization: `Bearer ${apiKey}` }, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(15_000),controller.signal]) });
-        if (!response.ok) throw new Error(`AgentRouter model discovery failed (HTTP ${response.status}). Check your key and account access.`);
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {});
+          const message = response.status === 401 ? 'AgentRouter rejected the API key (HTTP 401). Use an AgentRouter API token, not an account password or browser login token.'
+            : response.status === 403 ? 'AgentRouter denied model access (HTTP 403). Check the API token permissions and account access.'
+            : `AgentRouter model discovery failed (HTTP ${response.status}). Check your key and account access.`;
+          throw Object.assign(new Error(message), { status: response.status });
+        }
         const reader = response.body.getReader(), chunks = [];
         let size = 0;
         try {

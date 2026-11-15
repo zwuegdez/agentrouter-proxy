@@ -6,10 +6,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { appDirectory, readConfiguration, safeDirectory, writePrivate } from './install.mjs';
-import { createCatalog, codexCatalog } from './ag-models.mjs';
-import { createProxy, validateEndpoint } from './ag-proxy.mjs';
-import { buildLaunch, clientInstalled } from './ag-clients.mjs';
-import { manageService } from './ag-service.mjs';
+import { createCatalog, codexCatalog } from './model-catalog.mjs';
+import { createProxy, validateEndpoint } from './proxy-server.mjs';
+import { buildLaunch, clientInstalled } from './client-integrations.mjs';
+import { manageService } from './background-service.mjs';
 
 const SELF = join(dirname(fileURLToPath(import.meta.url)), 'ag.mjs');
 const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b);

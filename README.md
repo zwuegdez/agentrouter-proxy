@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.4/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.5/install.sh | bash
 ag setup
 ```
 
@@ -16,14 +16,14 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.4/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.5/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.4 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.4.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.4` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.5 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.5.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.5` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
 
@@ -360,7 +360,7 @@ Advanced users can change the listening port with `RELAY_PORT` or the HTTPS upst
 From the repository folder:
 
 ```sh
-node --test installer.test.mjs proxy.test.mjs
+node --test installer.test.mjs codex-relay.test.mjs
 node agentrouter-coding-proxy.mjs --self-test
 ```
 

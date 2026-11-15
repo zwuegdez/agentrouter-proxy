@@ -1,4 +1,4 @@
-import { validateEndpoint } from './ag-proxy.mjs';
+import { validateEndpoint } from './proxy-server.mjs';
 
 export function endpointTypes(model) {
   if (/(?:^|[/:._-])(?:gpt|o[134])(?:[._-]|\d|$)/i.test(model.id)) return ['responses'];

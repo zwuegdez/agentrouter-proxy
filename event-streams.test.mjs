@@ -4,9 +4,9 @@ import http from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createProxy } from './ag-proxy.mjs';
-import { forwardSse, readSse, jsonSse, writeStream, STREAM_IDLE_TIMEOUT, HEARTBEAT_MS } from './ag-streams.mjs';
-import { translateStream } from './ag-protocols.mjs';
+import { createProxy } from './proxy-server.mjs';
+import { forwardSse, readSse, jsonSse, writeStream, STREAM_IDLE_TIMEOUT, HEARTBEAT_MS } from './event-streams.mjs';
+import { translateStream } from './protocol-translation.mjs';
 
 async function start(t,server) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

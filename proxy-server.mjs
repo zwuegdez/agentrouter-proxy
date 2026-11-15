@@ -2,9 +2,9 @@ import http from 'node:http';
 import https from 'node:https';
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { endpointTypes, codexCatalog } from './ag-models.mjs';
-import { decodeUpstream, forwardSse, jsonSse, streamError, writeStream, HEARTBEAT_MS, STREAM_IDLE_TIMEOUT } from './ag-streams.mjs';
-import { ProtocolError, toResponses, fromResponses, translateResponse, translateStream } from './ag-protocols.mjs';
+import { endpointTypes, codexCatalog } from './model-catalog.mjs';
+import { decodeUpstream, forwardSse, jsonSse, streamError, writeStream, HEARTBEAT_MS, STREAM_IDLE_TIMEOUT } from './event-streams.mjs';
+import { ProtocolError, toResponses, fromResponses, translateResponse, translateStream } from './protocol-translation.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const HEADER_TIMEOUT = 60_000;

@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, mkdir, readFile, readdir, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { clientInstalled, installClient, buildLaunch, runClient } from './ag-clients.mjs';
+import { clientInstalled, installClient, buildLaunch, runClient } from './client-integrations.mjs';
 
 const token = 'local-fixture-token';
 async function fixture(t) {
@@ -149,7 +149,7 @@ test('terminating the launcher stops its client and removes the signal listener'
   const root = await fixture(t);
   await writeFile(join(root, 'codex'), `#!${process.execPath}\nconsole.log('client-ready'); setInterval(() => {}, 1000);\n`, { mode: 0o700 });
   const harness = join(root, 'launch.mjs');
-  await writeFile(harness, `import { runClient } from ${JSON.stringify(new URL('./ag-clients.mjs', import.meta.url).href)};\nconsole.log('status:' + await runClient('codex', { model: 'fixture', localBearer: 'fixture-token' }));\nconsole.log('listeners:' + process.listenerCount('SIGTERM'));\n`);
+  await writeFile(harness, `import { runClient } from ${JSON.stringify(new URL('./client-integrations.mjs', import.meta.url).href)};\nconsole.log('status:' + await runClient('codex', { model: 'fixture', localBearer: 'fixture-token' }));\nconsole.log('listeners:' + process.listenerCount('SIGTERM'));\n`);
   const child = spawn(process.execPath, [harness], { env: { ...process.env, PATH: root }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => child.kill('SIGTERM'));
   let output = '', errors = '', signalled = false;

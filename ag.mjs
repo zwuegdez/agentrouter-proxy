@@ -6,9 +6,9 @@ import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { appDirectory, readConfiguration, writePrivate } from './install.mjs';
-import { createProxy, validateEndpoint } from './ag-proxy.mjs';
-import { activate, deactivate, loadActive, runDaemon } from './ag-activation.mjs';
-import { CLIENTS, clientInstalled, installClient, runClient } from './ag-clients.mjs';
+import { createProxy, validateEndpoint } from './proxy-server.mjs';
+import { activate, deactivate, loadActive, runDaemon } from './activation.mjs';
+import { CLIENTS, clientInstalled, installClient, runClient } from './client-integrations.mjs';
 
 const DEFAULT_ENDPOINT = 'https://agentrouter.org/v1';
 const DEFAULT_PORT = 18766;

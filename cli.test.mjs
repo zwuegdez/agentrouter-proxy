@@ -8,7 +8,7 @@ import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { guidedSetup, launchSession, loadSetup, saveSetup, main, clientInstructions } from './ag.mjs';
-import { activate, deactivate } from './ag-activation.mjs';
+import { activate, deactivate } from './activation.mjs';
 
 const fixture = { client: 'codex', endpoint: 'https://provider.example/v1', apiKey: 'fixture-key', model: 'fixture-model' };
 async function directory(t) {

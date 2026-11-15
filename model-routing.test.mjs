@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { Readable } from 'node:stream';
-import { createProxy } from './ag-proxy.mjs';
-import { createCatalog, endpointTypes, normalizeModels } from './ag-models.mjs';
-import { toResponses, fromResponses, translateStream } from './ag-protocols.mjs';
+import { createProxy } from './proxy-server.mjs';
+import { createCatalog, endpointTypes, normalizeModels } from './model-catalog.mjs';
+import { toResponses, fromResponses, translateStream } from './protocol-translation.mjs';
 
 async function start(t,server) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

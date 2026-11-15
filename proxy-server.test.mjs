@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createProxy, validateEndpoint, stripStaleRefs } from './ag-proxy.mjs';
+import { createProxy, validateEndpoint, stripStaleRefs } from './proxy-server.mjs';
 
 async function start(t, server) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

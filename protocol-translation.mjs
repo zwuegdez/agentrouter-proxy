@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readSse, writeStream } from './ag-streams.mjs';
+import { readSse, writeStream } from './event-streams.mjs';
 
 export class ProtocolError extends Error {}
 const list = value => typeof value === 'string' ? [{ type: 'text', text: value }] : value || [];

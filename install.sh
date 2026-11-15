@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-site='https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.2'
+site='https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3'
 command -v curl >/dev/null 2>&1 || { echo 'curl is required to download the proxy.' >&2; exit 1; }
 node_bin=$(command -v node || true)
 if [[ -z "$node_bin" ]] || ! "$node_bin" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' >/dev/null 2>&1; then

@@ -60,9 +60,9 @@ function matchesToken(value, expected) {
   return provided.length === wanted.length && timingSafeEqual(provided, wanted);
 }
 
-export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = '', localBearer = '', port = 18766, catalog = null } = {}) {
+export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = '', localBearer = '', healthBearer = localBearer, port = 18766, catalog = null } = {}) {
   const upstream = validateEndpoint(endpoint);
-  for (const [name, value] of [['API key', apiKey], ['local bearer', localBearer]]) {
+  for (const [name, value] of [['API key', apiKey], ['local bearer', localBearer], ['health bearer', healthBearer]]) {
     if (typeof value !== 'string' || /[\x00-\x1f\x7f]/.test(value)) throw new Error(`Invalid ${name}.`);
   }
   if (apiKey && !localBearer) throw new Error('A local bearer token is required when an upstream API key is configured.');
@@ -79,6 +79,11 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
     res.on('close', () => { if (!res.writableEnded) { request?.destroy(); response?.destroy(); } });
     req.on('aborted', () => { request?.destroy(); response?.destroy(); });
     req.on('error', () => { reply(400, 'Could not read the request.'); request?.destroy(); });
+    if (healthBearer && req.method === 'GET' && ['/health', '/v1/health'].includes(req.url)) {
+      if (!matchesToken(req.headers.authorization, `Bearer ${healthBearer}`)) reply(401, 'Local proxy authorization is required.');
+      else { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ active: true })); }
+      req.resume(); return;
+    }
     if (localBearer && !(matchesToken(req.headers.authorization, `Bearer ${localBearer}`) || matchesToken(req.headers['x-api-key'], localBearer))) {
       reply(401, 'Local proxy authorization is required.'); req.resume(); return;
     }

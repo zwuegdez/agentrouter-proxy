@@ -140,3 +140,24 @@ test('CLI help needs no terminal, npm-style symlinks run correctly, and bad opti
     assert(result.stdout.includes('ag setup'));
   }
 });
+
+test('the interactive proxy menu starts a background service and returns without launching a client',async t=>{
+  const root=await directory(t),env={PATH:'',XDG_DATA_HOME:root},sink=output(),ui=answers(['1','2','']);
+  let closed=false,call;
+  ui.close=()=>{closed=true;};
+  assert.equal(await main([],{ui,env,output:sink,activation:async(setup,options)=>{
+    assert.equal(closed,true);call={setup,options};return {mode:'relay',setup,port:options.port};
+  }}),0);
+  assert.deepEqual(call.setup,{endpoint:'https://agentrouter.org/v1',client:'claude'});
+  assert.equal(call.options.relay,true);assert.equal(call.options.port,18766);
+  assert.match(ui.questions[0].label,/Autostart and crash restart/);
+  assert.match(sink.value,/ANTHROPIC_BASE_URL/);
+  assert.doesNotMatch(sink.value,/Keep this terminal open/);
+});
+
+test('ag proxy defaults to persistent mode and supports custom endpoint and port',async()=>{
+  let call;
+  assert.equal(await main(['proxy','--endpoint','https://provider.example/v1','--port','18767'],{output:output(),activation:async(setup,options)=>{call={setup,options};}}),0);
+  assert.equal(call.setup.endpoint,'https://provider.example/v1');assert.equal(call.options.port,18767);assert.equal(call.options.relay,true);
+  await assert.rejects(main(['activate','--foreground']),/Invalid option/);
+});

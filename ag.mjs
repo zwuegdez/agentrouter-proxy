@@ -16,8 +16,8 @@ export const HELP = `ag — local proxy for Codex CLI, Claude Code and OpenCode
 
 ag                 Choose existing setup, guided setup, or saved setup
 ag setup           Choose a client, endpoint, API key and model
-ag start           Start your saved setup
-ag proxy           Run only the proxy; keep your client's existing credentials
+ag start           Start your saved setup in the background with autostart
+ag proxy           Background proxy; keep your client's existing credentials
 ag activate        Keep AgentRouter active in the background for CLI/Desktop clients
 ag deactivate      Stop the background proxy and restore previous client settings
 ag status          Show activation status
@@ -30,8 +30,10 @@ ag start --port 18766
 Setup asks before installing a missing client or saving an API key.
 Saved settings: ${join(appDirectory(), 'ag.json')}
 Keys saved here are plaintext in a private file. Replacement backups also contain keys.
-ag start uses temporary settings. ag activate saves reversible client routing changes.
-ag start/ag proxy run in the foreground. ag activate registers an OS background service.
+ag start/ag activate save reversible client routing changes and private activation state.
+All starts register an OS background service with autostart and crash restart.
+Closing a terminal or client leaves it running; ag deactivate stops it.
+Use --foreground with ag start/ag proxy for the previous temporary session mode.
 Activation discovers AgentRouter models every five minutes. GPT uses Responses upstream;
 Claude/OpenCode requests are translated automatically when needed.
 Claude Desktop: import claude-desktop.json for Claude auto-discovery,
@@ -109,14 +111,14 @@ export async function guidedSetup(ui, { env = process.env, file = join(appDirect
     await saveSetup(setup, file);
     output.write('Setup saved. Use ag start next time. Replacements keep private backups.\n');
   }
-  const start = await ui.ask('Start the proxy and selected client now? [Y/n]: ');
+  const start = await ui.ask('Start in the background with autostart? Activation saves a private copy of this key. [Y/n]: ');
   return { setup, start: !/^n(o)?$/i.test(start) };
 }
 
 export function proxyInstructions(client, baseUrl) {
   if (client === 'claude') return `Set ANTHROPIC_BASE_URL=${baseUrl.replace(/\/v1$/, '')} in the terminal running Claude. Keep your existing key and model, then run claude.`;
-  if (client === 'opencode') return `Set your existing OpenCode provider's baseURL to ${baseUrl}. Keep its existing key, SDK and model, then run opencode. Use ag setup for temporary automatic routing.`;
-  return `In your active Codex provider, set base_url="${baseUrl}", wire_api="responses", supports_websockets=false. Keep its existing key and model, then restart codex. Use ag setup for temporary automatic routing.`;
+  if (client === 'opencode') return `Set your existing OpenCode provider's baseURL to ${baseUrl}. Keep its existing key, SDK and model, then run opencode. Use ag setup for automatic routing.`;
+  return `In your active Codex provider, set base_url="${baseUrl}", wire_api="responses", supports_websockets=false. Keep its existing key and model, then restart codex. Use ag setup for automatic routing.`;
 }
 
 export async function launchSession({ setup, endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT, client = 'codex' } = {},
@@ -145,23 +147,24 @@ export async function launchSession({ setup, endpoint = DEFAULT_ENDPOINT, port =
   }
 }
 
-export async function main(args = process.argv.slice(2), { input = process.stdin, output = process.stdout, env = process.env } = {}) {
+export async function main(args = process.argv.slice(2), { input = process.stdin, output = process.stdout, env = process.env, ui: promptUi, activation = activate } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22 or newer is required.');
   const command = args[0] || '';
   if (['help', '--help', '-h'].includes(command)) { output.write(HELP + '\n'); return 0; }
   if (!['', 'setup', 'start', 'proxy', 'activate', 'deactivate', 'status', 'models', 'daemon'].includes(command)) throw new Error('Unknown command. Run ag help.');
-  let endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT;
-  for (let i = 1; i < args.length; i += 2) {
-    if (args[i] === '--endpoint' && command === 'proxy' && args[i + 1]) endpoint = validateEndpoint(args[i + 1]).href.replace(/\/$/, '');
-    else if (args[i] === '--port' && ['start', 'proxy', 'activate'].includes(command) && /^\d+$/.test(args[i + 1] || '') && Number(args[i + 1]) >= 1 && Number(args[i + 1]) <= 65535) port = Number(args[i + 1]);
+  let endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT, foreground = false;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--foreground' && ['start', 'proxy'].includes(command)) foreground = true;
+    else if (args[i] === '--endpoint' && command === 'proxy' && args[i + 1]) endpoint = validateEndpoint(args[++i]).href.replace(/\/$/, '');
+    else if (args[i] === '--port' && ['start', 'proxy', 'activate'].includes(command) && /^\d+$/.test(args[i + 1] || '') && Number(args[i + 1]) >= 1 && Number(args[i + 1]) <= 65535) port = Number(args[++i]);
     else throw new Error('Invalid option. Run ag help.');
   }
-  if (command === 'activate') { await activate(await loadSetup(), { port, env, output }); return 0; }
   if (command === 'deactivate') { await deactivate({ env, output }); return 0; }
   if (command === 'daemon') return runDaemon({ output });
   if (command === 'status' || command === 'models') {
     const state = await loadActive();
     if (!state) { output.write('AgentRouter is inactive. Run ag activate.\n'); return command === 'models' ? 1 : 0; }
+    if(command === 'models' && state.mode === 'relay')throw new Error('Proxy-only mode keeps model discovery in your existing client. Use ag setup for the AgentRouter-only catalog.');
     let response;
     try { response = await fetch(`http://127.0.0.1:${state.port}/${command === 'models' ? 'v1/models' : 'health'}`, { headers: { authorization: `Bearer ${state.localBearer}` }, signal: AbortSignal.timeout(20_000), redirect: 'error' }); }
     catch { throw new Error('Activation is saved but the background proxy is unreachable. Check your OS service logs.'); }
@@ -170,12 +173,23 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
     else output.write(`AgentRouter is active at http://127.0.0.1:${state.port}/v1. Use ag deactivate to stop.\n`);
     return 0;
   }
-  if (command === 'start') return launchSession({ setup: await loadSetup(), port }, { env, output });
-  if (command === 'proxy') return launchSession({ endpoint, port }, { env, output });
-  const ui = prompts(input, output);
+  if (foreground) return launchSession(command === 'start' ? { setup: await loadSetup(), port } : { endpoint, port }, { env, output });
+  const startBackground = async session => {
+    const relay=!session.setup;
+    const state=await activation(session.setup || session,{port,env,output,relay});
+    if(state?.mode === 'relay')output.write(proxyInstructions(state.setup.client || 'codex',`http://127.0.0.1:${state.port}/v1`)+'\nAuthorization comes from your existing client.\n');
+    return 0;
+  };
+  if(['','start','activate'].includes(command)) {
+    const state=await loadActive();
+    if(state)return startBackground(state.mode === 'relay' ? state.setup : {setup:state.setup});
+  }
+  if (command === 'start' || command === 'activate') return startBackground({setup:await loadSetup()});
+  if (command === 'proxy') return startBackground({endpoint,client:'codex'});
+  const ui = promptUi || prompts(input, output);
   let session;
   try {
-    const choice = command === 'setup' ? '2' : await ui.ask('1. Proxy only — I already have client credentials\n2. Guided setup — choose a client, key and endpoint\n3. Start saved setup\nChoice [1]: ');
+    const choice = command === 'setup' ? '2' : await ui.ask('1. Background proxy — I already have client credentials\n2. Guided setup — choose a client, key and endpoint\n3. Start saved setup in the background\nAutostart and crash restart are enabled; use ag deactivate to stop.\nChoice [1]: ');
     if (choice === '2') {
       const result = await guidedSetup(ui, { env, output });
       if (!result.start) return 0;
@@ -187,7 +201,7 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
       session = { endpoint: validateEndpoint(selectedEndpoint).href.replace(/\/$/, ''), client };
     } else throw new Error('Choose 1, 2, or 3.');
   } finally { ui.close(); }
-  return launchSession(session, { env, output });
+  return startBackground(session);
 }
 
 if (process.argv[1] && process.argv[1] !== '-' && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

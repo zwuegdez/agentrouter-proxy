@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.2/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3/install.sh | bash
 ag setup
 ```
 
@@ -16,14 +16,14 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.2/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.2 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.2.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.2` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.3 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.3.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.3` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
 
@@ -38,7 +38,7 @@ ag models
 ag deactivate
 ```
 
-`ag activate --port 18767` selects another port. Activation configures all three clients and starts a loopback-only service. It stays enabled until `ag deactivate`; closing the terminal or a client does not stop it. Linux uses a user systemd service, macOS uses a LaunchAgent, and Windows uses a scheduled task with a restart loop. Linux needs an available user systemd manager; use `loginctl enable-linger "$USER"` if you want it to start at boot and survive logout. macOS/Windows start at user login. An asleep or powered-off device cannot serve requests.
+`ag activate --port 18767` selects another port. Activation configures all three clients and starts a loopback-only service. It stays enabled until `ag deactivate`; closing the terminal or a client does not stop it. Linux uses a user systemd service and enables lingering for boot startup and logout survival. If system policy denies that operation, activation reports the failure and rolls back; an administrator must enable lingering for that user. macOS uses a LaunchAgent and Windows uses a scheduled task, both starting at user login. All three restart the proxy after a crash. An asleep or powered-off device cannot serve requests.
 
 Activation validates your authenticated AgentRouter catalog before changing settings and checks that the service starts. A failed activation restores changed settings. Run one activation command at a time. If a command crashes, inspect `active.json` and the service before removing a stale `activation.lock` directory.
 
@@ -86,6 +86,7 @@ Saved setup and activation state live in `~/.local/share/agentrouter-codex-relay
 | No saved setup | Run `ag setup` and save it. |
 | Saved model unavailable | Select a model accessible to your AgentRouter key and save the setup again. |
 | Service cannot start / occupied port | Check OS service logs; choose `ag activate --port 18767`. |
+| Enabled proxy is down | Run `ag` or `ag start` to start the existing service again. A crashed process normally restarts after five seconds; an AgentRouter outage leaves the service enabled and catalog discovery retries. |
 | HTTP 401/403 | Check key and account access. |
 | HTTP 402/429 | Check provider balance, quota, and rate limits. |
 | HTTP 404 model unavailable | Refresh with `ag models`, reload the client picker, and choose an available model. |
@@ -97,14 +98,17 @@ Linux logs: `journalctl --user -u agentrouter-proxy.service`. macOS logs: the ap
 
 To update `ag`, deactivate, install the desired pinned release, then reactivate. Client updates are independent; the proxy uses published configuration/API contracts, but arbitrary future breaking changes may need a proxy update. To uninstall, deactivate first, then remove the launcher and app directory after checking keys/backups. npm: `npm uninstall --global agentrouter-proxy`. Desktop apps and CLI clients remain installed.
 
-## Foreground modes
+## Background and foreground modes
 
-`ag start` launches your saved CLI setup with temporary settings and stops when that client exits. `ag proxy` forwards the existing client's credentials and prints routing instructions. Both keep the terminal open and stop with Ctrl+C; model restriction and automatic protocol selection are part of persistent activation.
+The interactive `ag` menu, `ag start`, and `ag proxy` now start a background service with autostart and crash restart. The command returns to your shell; the proxy stays enabled until `ag deactivate`. Running `ag` or `ag start` while enabled starts the existing service again without another setup. `ag start` applies the saved AgentRouter setup through persistent activation. `ag proxy` and menu option 1 preserve the existing client's key, model selection, and settings, and print the local URL to configure in that client. Proxy-only mode saves the endpoint and a private health token, and model discovery stays in the existing client. Use guided setup for the AgentRouter-only catalog and automatic protocol selection.
+
+`ag start --foreground` retains the previous temporary client session and stops when the client exits. `ag proxy --foreground` runs only the proxy in your terminal. Ctrl+C stops either foreground mode. Background activation saves a private copy of the upstream key even if you decline a separate reusable setup file.
 
 ```sh
 ag start
 ag proxy --endpoint https://provider.example/v1 --port 18767
 ag help
+ag deactivate
 ```
 
 ## Verification
@@ -118,6 +122,8 @@ Tests cover activation rollback/restoration, private settings, model refresh/rem
 Installed Claude Code completed a GPT mock request through Messages → Responses with `CLIENT_PROXY_OK`. OpenCode accepted and restricted the provider/catalog, but its standalone generation check stalled during server startup before reaching the proxy.
 
 Installed Codex and Claude Code also completed against a mock that returned non-streaming JSON to streaming requests, each returning `CLIENT_PROXY_OK`.
+
+The v1.2.3 Linux background service was tested with isolated settings: it restarted after SIGKILL, started again after an explicit service stop, left a healthy process uninterrupted on repeated activation, stayed running through an upstream catalog outage, and served models after recovery. Deactivation removed the service and restored client settings. Boot startup uses enabled systemd units and lingering; this check did not reboot the host.
 
 Native desktop UI execution, Windows/macOS service execution, and funded inference with this protocol bridge remain unverified. An account's catalog listing does not guarantee quota or operational availability.
 

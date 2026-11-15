@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, stat, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { activate, deactivate, loadActive, syncClients, parseJsonc, patchCodex, restoreCodex, restoreJson } from './ag-activation.mjs';
+import { activate, deactivate, loadActive, runDaemon, syncClients, parseJsonc, patchCodex, restoreCodex, restoreJson } from './ag-activation.mjs';
 import { serviceSpec, manageService } from './ag-service.mjs';
+import { userInfo } from 'node:os';
+import { EventEmitter } from 'node:events';
+import http from 'node:http';
 
 async function root(t){const home=await mkdtemp(join(tmpdir(),'ag-active-'));t.after(()=>rm(home,{recursive:true,force:true}));return home;}
 const setup={client:'codex',endpoint:'https://agentrouter.org/v1',apiKey:'secret',model:'gpt-next'};
@@ -24,8 +27,8 @@ test('activate persists private config for Codex, Claude and OpenCode, idempoten
   const opencode=JSON.parse(await readFile(paths[2],'utf8'));assert.equal(opencode.providers.other.settings.baseURL,'https://old');assert.equal(opencode.providers.ag_proxy.settings.apiKey,state.localBearer);assert.equal(opencode.policies[0].action,'tool.use');assert.deepEqual(opencode.policies.slice(1).map(p=>p.effect),['deny','allow']);
   const desktop=JSON.parse(await readFile(join(app,'claude-desktop.json'),'utf8'));assert.equal(desktop.inferenceProvider,'gateway');assert.equal(desktop.modelDiscoveryEnabled,true);assert.equal(desktop.inferenceGatewayApiKey,state.localBearer);
   const allModels=JSON.parse(await readFile(join(app,'claude-desktop-all-models.json'),'utf8'));assert.deepEqual(allModels.inferenceModels.map(x=>x.name),['gpt-next','claude-new']);
-  await activate(setup,{app,home,env,service,fetcher,output});assert.deepEqual(calls,['install']);
-  await deactivate({app,env,service,output});assert.deepEqual(calls,['install','remove']);assert.equal(await loadActive(app),null);
+  await activate(setup,{app,home,env,service,fetcher,output});assert.deepEqual(calls,['install','start']);
+  await deactivate({app,env,service,output});assert.deepEqual(calls,['install','start','remove']);assert.equal(await loadActive(app),null);
   for(let i=0;i<paths.length;i++)assert.equal(await readFile(paths[i],'utf8'),original[i]);
 });
 
@@ -81,12 +84,44 @@ test('Codex patch leaves project/provider tables and multiline strings intact; r
 
 test('OS service specs restart after failure and keep argument paths quoted; Linux install/remove calls managers in order',async t=>{
   const home=await root(t),app=join(home,'with space'),script=join(app,'ag.mjs');
-  const linux=serviceSpec({home,app,script,platform:'linux',env:{},node:'/node with space'});assert.match(linux.content,/Restart=always/);assert.match(linux.content,/"\/node with space"/);
+  const linux=serviceSpec({home,app,script,platform:'linux',env:{},node:'/node with space'});assert.match(linux.content,/Restart=always/);assert.match(linux.content,/StartLimitIntervalSec=0/);assert.match(linux.content,/"\/node with space"/);
   const mac=serviceSpec({home,app,script,platform:'darwin',env:{}});assert.match(mac.content,/<key>KeepAlive<\/key><true\/>/);
   const win=serviceSpec({home,app,script,platform:'win32',env:{}});assert.match(win.content,/while \(Test-Path/);
   const calls=[];const run=async(command,args)=>{calls.push([command,args]);};
-  await manageService('install',{home,app,script,platform:'linux',env:{},run});await manageService('remove',{home,app,script,platform:'linux',env:{},run});
-  assert.deepEqual(calls.map(x=>x[1]),[['--user','daemon-reload'],['--user','enable','--now',linux.file],['--user','disable','--now','agentrouter-proxy.service'],['--user','daemon-reload']]);
+  await manageService('install',{home,app,script,platform:'linux',env:{},run});await manageService('start',{home,app,script,platform:'linux',env:{},run});await manageService('remove',{home,app,script,platform:'linux',env:{},run});
+  assert.deepEqual(calls.map(x=>x[1]),[['enable-linger',userInfo().username],['--user','daemon-reload'],['--user','enable','--now',linux.file],['--user','reset-failed','agentrouter-proxy.service'],['--user','start','agentrouter-proxy.service'],['--user','disable','--now','agentrouter-proxy.service'],['--user','daemon-reload']]);
+});
+
+test('proxy-only activation persists without keys or client edits and the daemon forwards existing credentials',async t=>{
+  const home=await root(t),app=join(home,'ag'),env={PATH:''},output={write:()=>{}},calls=[],service=async action=>calls.push(action);
+  const upstream=http.createServer((req,res)=>{assert.equal(req.headers.authorization,'Bearer existing-fixture-key');res.end('fixture-ok');});
+  await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{upstream.closeAllConnections();upstream.close();});
+  const portServer=http.createServer();await new Promise(resolve=>portServer.listen(0,'127.0.0.1',resolve));
+  const port=portServer.address().port;await new Promise(resolve=>portServer.close(resolve));
+  const state=await activate({endpoint:`http://127.0.0.1:${upstream.address().port}/v1`,client:'claude'},{relay:true,app,home,env,port,service,output,fetcher:()=>assert.fail('No key discovery in proxy-only mode')});
+  assert.equal(state.mode,'relay');assert.equal(state.setup.apiKey,undefined);assert.deepEqual(state.files,[]);
+  await assert.rejects(readFile(join(home,'.claude','settings.json')),/ENOENT/);
+  const signals=new EventEmitter(),running=runDaemon({app,signals,output});
+  t.after(async()=>{signals.emit('SIGTERM');await running;});
+  const url=`http://127.0.0.1:${port}`;
+  for(let i=0;;i++) {
+    try {const response=await fetch(url+'/health',{headers:{authorization:`Bearer ${state.localBearer}`}});assert.equal(response.status,200);break;}
+    catch(error){if(i===100)throw error;await new Promise(resolve=>setTimeout(resolve,10));}
+  }
+  assert.equal((await fetch(url+'/health')).status,401);
+  assert.equal(await (await fetch(url+'/v1/models',{headers:{authorization:'Bearer existing-fixture-key'}})).text(),'fixture-ok');
+  signals.emit('SIGTERM');assert.equal(await running,0);
+  assert.equal((await loadActive(app)).enabled,true);
+  await activate(state.setup,{relay:true,app,home,env,port,service,output});assert.deepEqual(calls,['install','start']);
+  await deactivate({app,env,service,output});assert.equal(await loadActive(app),null);assert.deepEqual(calls,['install','start','remove']);
+});
+
+test('Linux autostart failure rolls activation back instead of claiming boot startup',async t=>{
+  const home=await root(t),app=join(home,'ag'),env={PATH:''},output={write:()=>{}};
+  const service=async(action,options)=>manageService(action,{...options,platform:'linux',run:async(command)=>{if(command==='loginctl')throw new Error('denied');}});
+  await assert.rejects(activate({endpoint:'https://agentrouter.org/v1',client:'codex'},{relay:true,app,home,env,service,output}),/Could not enable Linux boot startup/);
+  assert.equal(await loadActive(app),null);
 });
 
 

@@ -171,32 +171,44 @@ async function lock(app,work) {
   try {return await work();}finally{await rmdir(path);}
 }
 
-export async function activate(setup,{app=process.env.AG_APP_DIR || appDirectory(),port=18766,home=homedir(),env=process.env,service=manageService,fetcher=fetch,output=process.stdout}={}) {
+async function waitForService(state) {
+  for(let attempt=0;attempt<40;attempt++) {
+    try {const response=await fetch(`http://127.0.0.1:${state.port}/health`,{headers:{authorization:`Bearer ${state.localBearer}`},redirect:'error',signal:AbortSignal.timeout(500)}); if(response.ok && (await response.json()).active)return;}catch{}
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  throw new Error('The background service did not start. Check the OS service logs and whether the port is occupied.');
+}
+
+export async function activate(setup,{app=process.env.AG_APP_DIR || appDirectory(),port=18766,home=homedir(),env=process.env,service=manageService,fetcher=fetch,output=process.stdout,relay=false}={}) {
   const endpoint=validateEndpoint(setup.endpoint);
-  if(typeof setup.apiKey !== 'string' || !setup.apiKey || /[\x00-\x20\x7f]/.test(setup.apiKey) || typeof setup.model !== 'string' || !setup.model || setup.model.length>200 || /[\x00-\x1f\x7f]/.test(setup.model))throw new Error('Invalid saved setup. Run ag setup.');
+  if(!relay && (typeof setup.apiKey !== 'string' || !setup.apiKey || /[\x00-\x20\x7f]/.test(setup.apiKey) || typeof setup.model !== 'string' || !setup.model || setup.model.length>200 || /[\x00-\x1f\x7f]/.test(setup.model)))throw new Error('Invalid saved setup. Run ag setup.');
   if(!Number.isInteger(port) || port<1 || port>65535)throw new Error('Invalid activation port.');
-  if(endpoint.hostname!=='agentrouter.org' && !['localhost','127.0.0.1','[::1]'].includes(endpoint.hostname))throw new Error('Activation loads models only from agentrouter.org. Use ag proxy for another provider.');
+  if(!relay && endpoint.hostname!=='agentrouter.org' && !['localhost','127.0.0.1','[::1]'].includes(endpoint.hostname))throw new Error('Activation loads models only from agentrouter.org. Use ag proxy for another provider.');
   return lock(app,async()=> {
-    if(await loadActive(app)) {output.write('AgentRouter is already active. Use ag status or ag deactivate.\n');return;}
-    const catalog=createCatalog({endpoint:setup.endpoint,apiKey:setup.apiKey,fetcher});
-    const models=await catalog.refresh();
-    if(!models.some(model=>model.id===setup.model))throw new Error('Your saved model is unavailable in AgentRouter. Run ag setup and choose a current model.');
-    const state={enabled:true,app,setup,port,localBearer:randomBytes(32).toString('hex'),providerId:'ag_proxy_'+randomUUID().replaceAll('-',''),files:[],home,envPaths:Object.fromEntries(['CODEX_HOME','CLAUDE_CONFIG_DIR','XDG_CONFIG_HOME','PATH','Path'].filter(key=>env[key]).map(key=>[key,env[key]]))};
+    const existing=await loadActive(app);
+    if(existing) {
+      await service('start',{app,script:SELF,home:existing.home,env});
+      if(service === manageService)await waitForService(existing);
+      output.write(`AgentRouter is running in the background at http://127.0.0.1:${existing.port}/v1. Use ag deactivate to stop.\n`);
+      return existing;
+    }
+    let models;
+    if(!relay) {
+      const catalog=createCatalog({endpoint:setup.endpoint,apiKey:setup.apiKey,fetcher});
+      try { models=await catalog.refresh(); } finally { await catalog.close(); }
+      if(!models.some(model=>model.id===setup.model))throw new Error('Your saved model is unavailable in AgentRouter. Run ag setup and choose a current model.');
+    }
+    const state={enabled:true,app,setup:relay ? {endpoint:endpoint.href.replace(/\/$/,''),client:setup.client} : setup,mode:relay ? 'relay' : 'catalog',port,localBearer:randomBytes(32).toString('hex'),providerId:'ag_proxy_'+randomUUID().replaceAll('-',''),files:[],home,envPaths:Object.fromEntries(['CODEX_HOME','CLAUDE_CONFIG_DIR','XDG_CONFIG_HOME','PATH','Path'].filter(key=>env[key]).map(key=>[key,env[key]]))};
     await writePrivate(join(app,'active.json'),JSON.stringify(state,null,2)+'\n',{backup:false});
     let installing=false;
     try {
-      await syncClients(state,models,{home,env});
+      if(!relay)await syncClients(state,models,{home,env});
       installing=true;
       await service('install',{app,script:SELF,home,env});
-      if(service === manageService) {
-        let ready=false;
-        for(let attempt=0;attempt<40;attempt++) {
-          try {const response=await fetch(`http://127.0.0.1:${port}/health`,{headers:{authorization:`Bearer ${state.localBearer}`},redirect:'error',signal:AbortSignal.timeout(500)}); if(response.ok && (await response.json()).active){ready=true;break;}}catch{}
-          await new Promise(resolve=>setTimeout(resolve,100));
-        }
-        if(!ready)throw new Error('The background service did not start. Check the OS service logs and whether the port is occupied.');
-      }
-      output.write(`AgentRouter activated at http://127.0.0.1:${port}/v1. Use ag deactivate to stop and restore settings.\nRestart Codex/Desktop and Claude Code. Run opencode reload for an existing OpenCode service.\nClaude Desktop: import ${join(app,'claude-desktop.json')} (Claude auto-discovery) or ${join(app,'claude-desktop-all-models.json')} (GPT/all models; reimport after catalog changes) in Developer > Configure Third-Party Inference, Apply Changes, then relaunch.\n`);
+      if(service === manageService)await waitForService(state);
+      output.write(`AgentRouter is running in the background at http://127.0.0.1:${port}/v1. Autostart and crash restart are enabled; closing this terminal does not stop it. Use ag deactivate to stop.\n`);
+      if(!relay)output.write(`Restart Codex/Desktop and Claude Code. Run opencode reload for an existing OpenCode service.\nClaude Desktop: import ${join(app,'claude-desktop.json')} (Claude auto-discovery) or ${join(app,'claude-desktop-all-models.json')} (GPT/all models; reimport after catalog changes) in Developer > Configure Third-Party Inference, Apply Changes, then relaunch.\n`);
+      return state;
     }catch(error){
       if(installing)await service('remove',{app,script:SELF,home,env}).catch(()=>{});
       try{await restoreFiles(state);await unlink(join(app,'active.json'));}catch(restore){throw new Error(`${error.message} Restore also failed: ${restore.message}. Recovery state remains in active.json.`);}
@@ -222,24 +234,25 @@ export async function runDaemon({app=process.env.AG_APP_DIR || appDirectory(),si
   const state=await loadActive(app);
   if(!state?.enabled)throw new Error('AgentRouter is inactive. Run ag activate.');
   let stopping=false;
-  const catalog=createCatalog({endpoint:state.setup.endpoint,apiKey:state.setup.apiKey,refreshMs,onChange:async models=>{
+  const relay=state.mode==='relay';
+  const catalog=relay ? null : createCatalog({endpoint:state.setup.endpoint,apiKey:state.setup.apiKey,refreshMs,onChange:async models=>{
     if(stopping)return;
     await syncClients(state,models,{home:state.home,env:{...process.env,...state.envPaths}});
   }});
   // Bring up the listener even when the upstream is temporarily unavailable after reboot.
-  const server=createProxy({endpoint:state.setup.endpoint,apiKey:state.setup.apiKey,localBearer:state.localBearer,port:state.port,catalog});
+  const server=createProxy({endpoint:state.setup.endpoint,apiKey:relay ? '' : state.setup.apiKey,localBearer:relay ? '' : state.localBearer,healthBearer:state.localBearer,port:state.port,catalog});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(resolve);});
   let done; const stopped=new Promise(resolve=>{done=resolve;});
-  const stop=()=>{stopping=true;catalog.close().catch(()=>{});done();server.closeAllConnections();server.close();};
+  const stop=()=>{stopping=true;catalog?.close().catch(()=>{});done();server.closeAllConnections();server.close();};
   signals.on('SIGTERM',stop);signals.on('SIGINT',stop);
   const refresh=()=>catalog.refresh(true).catch(error=>output.write(error.message+'\n'));
-  const timer=setInterval(refresh,refreshMs);timer.unref();
-  refresh();
+  const timer=relay ? null : setInterval(refresh,refreshMs);timer?.unref();
+  if(!relay)refresh();
   try{await stopped;}finally{
     clearInterval(timer);signals.off('SIGTERM',stop);signals.off('SIGINT',stop);
     server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
     // Wait for an in-flight refresh before restoration reads its journal.
-    await catalog.close();
+    await catalog?.close();
   }
   return 0;
 }

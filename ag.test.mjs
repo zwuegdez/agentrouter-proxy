@@ -7,7 +7,8 @@ import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { guidedSetup, launchSession, loadSetup, saveSetup, main } from './ag.mjs';
+import { guidedSetup, launchSession, loadSetup, saveSetup, main, clientInstructions } from './ag.mjs';
+import { activate, deactivate } from './ag-activation.mjs';
 
 const fixture = { client: 'codex', endpoint: 'https://provider.example/v1', apiKey: 'fixture-key', model: 'fixture-model' };
 async function directory(t) {
@@ -161,4 +162,39 @@ test('ag proxy defaults to persistent mode and supports custom endpoint and port
   assert.equal(await main(['proxy','--endpoint','https://provider.example/v1','--port','18767'],{output:output(),activation:async(setup,options)=>{call={setup,options};}}),0);
   assert.equal(call.setup.endpoint,'https://provider.example/v1');assert.equal(call.options.port,18767);assert.equal(call.options.relay,true);
   await assert.rejects(main(['activate','--foreground']),/Invalid option/);
+});
+
+test('every desktop choice is selectable and saved without installing a CLI package',async t=>{
+  const root=await directory(t);
+  for(const [number,client] of [[4,'codex-desktop'],[5,'claude-desktop'],[6,'opencode-desktop']]) {
+    const ui=answers([String(number),'','fixture-model','y','n']),sink=output(),file=join(root,client+'.json');
+    const result=await guidedSetup(ui,{file,env:{PATH:'',AG_API_KEY:'fixture-key'},output:sink,
+      installed:()=>assert.fail('Desktop installation must not be inferred from a CLI'),install:()=>assert.fail('Desktop choices must not install npm packages')});
+    assert.equal(result.setup.client,client);assert.equal(result.start,false);
+    assert.equal((await loadSetup(file)).client,client);
+    for(const name of ['Codex Desktop','Claude Code Desktop','OpenCode Desktop'])assert(ui.questions[0].label.includes(name));
+    assert.match(sink.value,/desktop computer/);assert(!sink.value.includes('fixture-key'));
+  }
+});
+
+test('ag clients shows desktop import and VPS connection instructions without restarting activation',async t=>{
+  const root=await directory(t),app=join(root,'ag'),env={AG_APP_DIR:app,PATH:''},sink=output(),ui=answers(['5']);
+  await activate({...fixture,endpoint:'https://agentrouter.org/v1'},{app,home:root,env,service:async()=>{},fetcher:async()=>new Response(JSON.stringify({data:[{id:fixture.model}]})),output:output()});
+  t.after(()=>deactivate({app,env,service:async()=>{},output:output()}));
+  let closed=false;ui.close=()=>{closed=true;};
+  assert.equal(await main(['clients'],{env,ui,output:sink,activation:()=>assert.fail('Client help must leave the service alone')}),0);
+  assert.equal(closed,true);
+  assert.match(sink.value,/Import configuration/);assert(sink.value.includes(join(app,'claude-desktop.json')));
+  assert.match(sink.value,/ssh -N -L 18766:127.0.0.1:18766/);
+  assert.match(sink.value,/tunnel alone does not configure/);
+});
+
+test('desktop instructions cover each native app and foreground launch is rejected before starting a client',async()=>{
+  const state={app:'/fixture/ag',mode:'relay',port:18767};
+  for(const client of ['codex-desktop','claude-desktop','opencode-desktop']) {
+    const text=clientInstructions(client,state);
+    assert.match(text,/http:\/\/127.0.0.1:18767/);assert.match(text,/Install the app from https:/);
+    assert.match(text,/USER@YOUR_VPS/);
+    await assert.rejects(launchSession({setup:{...fixture,client}},{launch:()=>assert.fail('No desktop CLI launch')}),/background activation/);
+  }
 });

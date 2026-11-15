@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.4/install.sh | bash
 ag setup
 ```
 
@@ -16,16 +16,31 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.4/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.3 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.3.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.3` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.4 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.4.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.4` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
+
+## CLI and desktop choices
+
+Run `ag setup` for guided configuration, or `ag clients` for connection instructions while the proxy is already active. Both menus list:
+
+1. Codex CLI
+2. Claude Code CLI
+3. OpenCode CLI
+4. Codex Desktop
+5. Claude Code Desktop
+6. OpenCode Desktop
+
+Desktop choices show official download links and use background activation; they do not install or launch a CLI package. Codex and OpenCode Desktop use provider configuration on the computer running the app. Claude Code Desktop uses its separate gateway configuration/import.
+
+If the proxy runs on a VPS and the desktop app runs elsewhere, open an SSH tunnel **on the desktop computer**: `ssh -N -L 18766:127.0.0.1:18766 USER@YOUR_VPS` (substitute your selected port). Keep it open and configure the app to use `http://127.0.0.1:18766/v1`, or the root URL without `/v1` for Claude. Transfer needed configuration/import files privately and adjust any local file paths; a tunnel alone does not configure the app. Running `ag setup` directly on the desktop computer is the easiest local configuration path.
 
 ## Activate and deactivate
 
@@ -107,6 +122,7 @@ The interactive `ag` menu, `ag start`, and `ag proxy` now start a background ser
 ```sh
 ag start
 ag proxy --endpoint https://provider.example/v1 --port 18767
+ag clients
 ag help
 ag deactivate
 ```

@@ -12,7 +12,7 @@ import { CLIENTS, clientInstalled, installClient, runClient } from './ag-clients
 
 const DEFAULT_ENDPOINT = 'https://agentrouter.org/v1';
 const DEFAULT_PORT = 18766;
-export const HELP = `ag — local proxy for Codex CLI, Claude Code and OpenCode
+export const HELP = `ag — local proxy for Codex, Claude Code and OpenCode CLI/Desktop
 
 ag                 Choose existing setup, guided setup, or saved setup
 ag setup           Choose a client, endpoint, API key and model
@@ -22,6 +22,7 @@ ag activate        Keep AgentRouter active in the background for CLI/Desktop cli
 ag deactivate      Stop the background proxy and restore previous client settings
 ag status          Show activation status
 ag models          Show the live AgentRouter model list while active
+ag clients         Choose CLI/Desktop connection instructions without stopping the proxy
 ag help            Show this guide
 
 ag proxy --endpoint https://agentrouter.org/v1 --port 18766
@@ -43,7 +44,7 @@ Provider account, quota and model compatibility errors still need provider fixes
 
 export function validateSetup(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid saved setup. Run ag setup.');
-  if (!Object.hasOwn(CLIENTS, value.client)) throw new Error('Choose codex, claude, or opencode.');
+  if (!Object.hasOwn(CLIENTS, value.client)) throw new Error('Choose a listed CLI or desktop client.');
   const endpoint = validateEndpoint(value.endpoint).href.replace(/\/$/, '');
   if (typeof value.apiKey !== 'string' || !value.apiKey || /[\x00-\x20\x7f]/.test(value.apiKey)) throw new Error('Enter an API key without whitespace.');
   if (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 200 || /[\x00-\x1f\x7f]/.test(value.model)) throw new Error('Enter a valid model name.');
@@ -84,17 +85,18 @@ function prompts(input, output) {
 
 async function chooseClient(ui, env) {
   const clients = Object.keys(CLIENTS);
-  const label = clients.map((client, i) => `${i + 1}. ${CLIENTS[client].name}${clientInstalled(client, { env }) ? ' (installed)' : ''}`).join('\n');
+  const label = clients.map((client, i) => `${i + 1}. ${CLIENTS[client].name}${CLIENTS[client].desktop ? ' (desktop app)' : clientInstalled(client, { env }) ? ' (installed)' : ''}`).join('\n');
   const answer = await ui.ask(`${label}\nClient [1]: `);
   const client = clients[Number(answer || '1') - 1] || answer.toLowerCase();
-  if (!Object.hasOwn(CLIENTS, client)) throw new Error('Choose 1, 2, or 3.');
+  if (!Object.hasOwn(CLIENTS, client)) throw new Error(`Choose a client from 1 to ${clients.length}.`);
   return client;
 }
 
 export async function guidedSetup(ui, { env = process.env, file = join(appDirectory(), 'ag.json'), output = process.stdout,
   installed = clientInstalled, install = installClient } = {}) {
   const client = await chooseClient(ui, env);
-  if (!installed(client, { env })) {
+  if(CLIENTS[client].desktop)output.write(`Install ${CLIENTS[client].name} from ${CLIENTS[client].download} on your desktop computer, then open it after setup.\n`);
+  else if (!installed(client, { env })) {
     const answer = await ui.ask(`Install ${CLIENTS[client].name} with npm install --global ${CLIENTS[client].package}? [y/N]: `);
     if (!/^y(es)?$/i.test(answer)) throw new Error(`Client installation declined. Install ${client} yourself, then run ag setup again.`);
     await install(client, { env });
@@ -116,14 +118,28 @@ export async function guidedSetup(ui, { env = process.env, file = join(appDirect
 }
 
 export function proxyInstructions(client, baseUrl) {
+  if(client === 'claude-desktop')return `Claude Code Desktop: Help > Troubleshooting > Enable Developer Mode > Developer > Configure Third-Party Inference. Choose a gateway at ${baseUrl.replace(/\/v1$/,'')}, use bearer authentication with your existing AgentRouter key, Apply Changes, then relaunch. Use ag setup for generated import files and model discovery.`;
+  if(client === 'opencode-desktop')return `OpenCode Desktop: set your existing OpenAI-compatible provider's baseURL to ${baseUrl}, keep its existing key and model, then restart the app. Use ag setup for automatic provider configuration on this computer.`;
+  if(client === 'codex-desktop')return `Codex Desktop: in the desktop computer's Codex provider config set base_url="${baseUrl}", wire_api="responses", supports_websockets=false. Keep your existing AgentRouter key and model, then restart the app. Use ag setup on that computer for automatic configuration.`;
   if (client === 'claude') return `Set ANTHROPIC_BASE_URL=${baseUrl.replace(/\/v1$/, '')} in the terminal running Claude. Keep your existing key and model, then run claude.`;
   if (client === 'opencode') return `Set your existing OpenCode provider's baseURL to ${baseUrl}. Keep its existing key, SDK and model, then run opencode. Use ag setup for automatic routing.`;
   return `In your active Codex provider, set base_url="${baseUrl}", wire_api="responses", supports_websockets=false. Keep its existing key and model, then restart codex. Use ag setup for automatic routing.`;
 }
 
+export function clientInstructions(client,state) {
+  if(!state)return 'AgentRouter is inactive. Run ag setup for automatic routing or ag proxy with your existing client credentials.';
+  const baseUrl=`http://127.0.0.1:${state.port}/v1`;
+  let text=state.mode === 'relay' ? proxyInstructions(client,baseUrl) : client === 'claude-desktop'
+    ? `Claude Code Desktop: Help > Troubleshooting > Enable Developer Mode > Developer > Configure Third-Party Inference > Import configuration. Import ${join(state.app,'claude-desktop.json')} for Claude auto-discovery or ${join(state.app,'claude-desktop-all-models.json')} for all models. Apply Changes, then relaunch.`
+    : `On this computer, ${CLIENTS[client].name} uses the generated AgentRouter settings. Restart the client/app to load them. Claude Code Desktop requires its separate import; choose option 5 in ag clients.`;
+  if(CLIENTS[client].desktop)text+=`\nInstall the app from ${CLIENTS[client].download}.\nIf this proxy is on a VPS and the app is on another computer, 127.0.0.1 refers to that computer. Run ag setup there for local configuration, or open an SSH tunnel there: ssh -N -L ${state.port}:127.0.0.1:${state.port} USER@YOUR_VPS. Keep the tunnel open. For a VPS activation, transfer the generated provider settings or Claude import file privately to the desktop computer and adjust local file paths; a tunnel alone does not configure the app.`;
+  return text;
+}
+
 export async function launchSession({ setup, endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT, client = 'codex' } = {},
   { env = process.env, output = process.stdout, signals = process, launch = runClient } = {}) {
   if (setup) setup = validateSetup(setup);
+  if(setup && CLIENTS[setup.client].desktop)throw new Error('Desktop apps need background activation. Run ag start without --foreground, then open the app yourself.');
   const localBearer = setup ? randomBytes(32).toString('hex') : '';
   const server = createProxy({ endpoint: setup?.endpoint || endpoint, apiKey: setup?.apiKey || '', localBearer, port });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(resolve); });
@@ -152,7 +168,7 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
   const app=env.AG_APP_DIR || appDirectory(undefined,undefined,env),file=join(app,'ag.json');
   const command = args[0] || '';
   if (['help', '--help', '-h'].includes(command)) { output.write(HELP + '\n'); return 0; }
-  if (!['', 'setup', 'start', 'proxy', 'activate', 'deactivate', 'status', 'models', 'daemon'].includes(command)) throw new Error('Unknown command. Run ag help.');
+  if (!['', 'setup', 'start', 'proxy', 'activate', 'deactivate', 'status', 'models', 'clients', 'daemon'].includes(command)) throw new Error('Unknown command. Run ag help.');
   let endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT, foreground = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--foreground' && ['start', 'proxy'].includes(command)) foreground = true;
@@ -162,6 +178,12 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
   }
   if (command === 'deactivate') { await deactivate({ app, env, output }); return 0; }
   if (command === 'daemon') return runDaemon({ app, output });
+  if(command === 'clients') {
+    const ui=promptUi || prompts(input,output);
+    try {output.write(clientInstructions(await chooseClient(ui,env),await loadActive(app))+'\n');}
+    finally {ui.close();}
+    return 0;
+  }
   if (command === 'status' || command === 'models') {
     const state = await loadActive(app);
     if (!state) { output.write('AgentRouter is inactive. Run ag activate.\n'); return command === 'models' ? 1 : 0; }
@@ -178,7 +200,9 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
   const startBackground = async session => {
     const relay=!session.setup;
     const state=await activation(session.setup || session,{app,port,env,output,relay});
-    if(state?.mode === 'relay')output.write(proxyInstructions(state.setup.client || 'codex',`http://127.0.0.1:${state.port}/v1`)+'\nAuthorization comes from your existing client.\n');
+    const client=session.setup?.client || session.client || state?.setup.client || 'codex';
+    if(state?.mode === 'relay' || CLIENTS[client]?.desktop)output.write(clientInstructions(client,state)+'\n');
+    output.write('For CLI and desktop choices and connection steps, run ag clients.\n');
     return 0;
   };
   if(['','start','activate'].includes(command)) {

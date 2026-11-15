@@ -26,6 +26,15 @@ test('client detection checks executable PATH entries and Windows shims without 
   assert.throws(() => clientInstalled('other'), /Choose/);
 });
 
+test('desktop choices require official app installation and cannot launch as CLI clients',async()=>{
+  for(const client of ['codex-desktop','claude-desktop','opencode-desktop']) {
+    assert.equal(clientInstalled(client,{env:{PATH:''}}),false);
+    await assert.rejects(installClient(client,{env:{PATH:''}}),/Install .* from https:/);
+    assert.throws(()=>buildLaunch(client,{localBearer:token}),/background activation/);
+    await assert.rejects(runClient(client,{localBearer:token},{env:{PATH:''}}),/background activation/);
+  }
+});
+
 test('Codex launch supplies only session overrides and keeps its token out of arguments', () => {
   const result = buildLaunch('codex', { model: 'model-with-"quotes"', localBearer: token });
   assert.deepEqual(result.args.slice(0, 2), ['--model', 'model-with-"quotes"']);

@@ -2,7 +2,7 @@ param([switch]$RelayOnly)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$site = 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.3'
+$site = 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.4'
 $appRoot = Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay'
 $workDir = Join-Path ([IO.Path]::GetTempPath()) ('agentrouter-install-' + [Guid]::NewGuid().ToString('N'))
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User

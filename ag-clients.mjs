@@ -8,12 +8,15 @@ import { randomUUID } from 'node:crypto';
 
 export const CLIENTS = Object.freeze({
   codex: { name: 'Codex CLI', package: '@openai/codex' },
-  claude: { name: 'Claude Code', package: '@anthropic-ai/claude-code' },
-  opencode: { name: 'OpenCode', package: 'opencode-ai' },
+  claude: { name: 'Claude Code CLI', package: '@anthropic-ai/claude-code' },
+  opencode: { name: 'OpenCode CLI', package: 'opencode-ai' },
+  'codex-desktop': { name: 'Codex Desktop', desktop: true, download: 'https://chatgpt.com/codex' },
+  'claude-desktop': { name: 'Claude Code Desktop', desktop: true, download: 'https://claude.com/download' },
+  'opencode-desktop': { name: 'OpenCode Desktop', desktop: true, download: 'https://opencode.ai/download' },
 });
 
 function clientInfo(client) {
-  if (!Object.hasOwn(CLIENTS, client)) throw new Error('Choose codex, claude, or opencode.');
+  if (!Object.hasOwn(CLIENTS, client)) throw new Error('Choose a listed CLI or desktop client.');
   return CLIENTS[client];
 }
 
@@ -53,7 +56,7 @@ function invocation(command, options) {
 }
 
 export function clientInstalled(client, options = {}) {
-  clientInfo(client);
+  if(clientInfo(client).desktop)return false;
   return Boolean(executable(client, options));
 }
 
@@ -69,6 +72,7 @@ function run(command, args, env) {
 
 export async function installClient(client, { env = process.env, platform = process.platform } = {}) {
   const info = clientInfo(client);
+  if(info.desktop)throw new Error(`Install ${info.name} from ${info.download} on your desktop computer.`);
   if (clientInstalled(client, { env, platform })) return 0;
   const npm = invocation('npm', { env, platform });
   const code = await run(npm.command, [...npm.args, 'install', '--global', info.package], env);
@@ -77,7 +81,7 @@ export async function installClient(client, { env = process.env, platform = proc
 }
 
 export function buildLaunch(client, { model = '', baseUrl = 'http://127.0.0.1:18766/v1', localBearer = '', opencodeVersion = 2 } = {}) {
-  clientInfo(client);
+  if(clientInfo(client).desktop)throw new Error('Desktop apps use background activation. Run ag setup or ag clients, then open the app yourself.');
   const url = new URL(baseUrl);
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('The client must connect to the local proxy URL.');
   if (typeof model !== 'string' || model.length > 200 || /[\x00-\x1f\x7f]/.test(model)) throw new Error('Invalid model name.');
@@ -110,6 +114,7 @@ export function buildLaunch(client, { model = '', baseUrl = 'http://127.0.0.1:18
 }
 
 export async function runClient(client, options, { env = process.env, platform = process.platform, extraArgs = [] } = {}) {
+  if(clientInfo(client).desktop)throw new Error('Desktop apps use background activation. Run ag setup or ag clients, then open the app yourself.');
   const binary = invocation(client, { env, platform });
   if (!Array.isArray(extraArgs) || extraArgs.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('Invalid client arguments.');
   if (client === 'opencode') {

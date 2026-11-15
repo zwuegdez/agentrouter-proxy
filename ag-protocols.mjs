@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readSse, writeStream } from './ag-streams.mjs';
 
 export class ProtocolError extends Error {}
 const list = value => typeof value === 'string' ? [{ type: 'text', text: value }] : value || [];
@@ -158,32 +159,31 @@ export function translateResponse(body, source, target, model, tools = []) {
 }
 
 async function* sse(stream) {
-  let buffer = '', size = 0;
-  const decoder = new TextDecoder();
-  for await (const chunk of stream) {
-    buffer += decoder.decode(chunk, { stream: true });
-    if (buffer.length > 4 * 1024 * 1024) throw new ProtocolError('Upstream SSE event exceeds 4 MiB.');
-    let match;
-    while ((match = /\r?\n\r?\n/.exec(buffer))) {
-      const frame = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
-      const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-      if (!data || data === '[DONE]') continue;
-      size += data.length;
-      if (size > 32 * 1024 * 1024) throw new ProtocolError('Translated output exceeds 32 MiB.');
-      yield JSON.parse(data);
-    }
+  let size=0;
+  for await(const {event,data} of readSse(stream)) {
+    if(!data)continue;
+    if(data.trim()==='[DONE]'){yield {type:'ag.done'};continue;}
+    size+=data.length;
+    if(size>32*1024*1024)throw new ProtocolError('Translated output exceeds 32 MiB.');
+    const value=JSON.parse(data);
+    if(!value || typeof value!=='object' || Array.isArray(value))throw new ProtocolError('Invalid upstream SSE payload.');
+    if(!value.type && event)value.type=event;
+    if(value.type==='response.done' && ['completed','incomplete','failed'].includes(value.response?.status))value.type='response.'+value.response.status;
+    yield value;
   }
-  if (buffer.trim()) throw new ProtocolError('Upstream ended with an incomplete SSE event.');
 }
 
 export async function translateStream(stream, source, target, model, res, tools = []) {
   const custom = new Set(tools.filter(tool=>tool.type === 'custom').map(tool=>tool.name));
   const id = `resp_${randomUUID()}`, items = new Map();
-  let started = false, ended = false, usage = { input_tokens: 0, output_tokens: 0 }, sequence = 0, limited = false;
+  let started = false, ended = false, usage = { input_tokens: 0, output_tokens: 0 }, sequence = 0, limited = false, incompleteDetails=null;
+  const openBlocks=new Set();
+  let pending=[];
+  const flush=async()=>{for(const value of pending)await writeStream(res,value);pending=[];};
   const send = (type, value) => {
     const data = target === 'chat' ? value : { type, ...value };
     if (target === 'responses') data.sequence_number = sequence++;
-    res.write(`${target === 'chat' ? '' : `event: ${type}\n`}data: ${JSON.stringify(data)}\n\n`);
+    pending.push(`${target === 'chat' ? '' : `event: ${type}\n`}data: ${JSON.stringify(data)}\n\n`);
   };
   const response = status => ({ id, object: 'response', model, status, output: [...items.values()].map(item => item.call ? { id: item.id, type: custom.has(item.name) ? 'custom_tool_call' : 'function_call', call_id: item.call, name: item.name, ...(custom.has(item.name) ? { input: JSON.parse(item.value || '{}').input || '' } : { arguments: item.value }), status: 'completed' } : { id: item.id, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: item.value, annotations: [] }] }), usage });
   const chat = (delta, finish_reason = null, extra = {}) => ({ id, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta, finish_reason }], ...extra });
@@ -208,14 +208,17 @@ export async function translateStream(stream, source, target, model, res, tools 
     item.value += value;
     if (target === 'messages') send('content_block_delta', { index: item.index, delta: item.call ? { type: 'input_json_delta', partial_json: value } : { type: 'text_delta', text: value } });
     else if (target === 'responses' && !custom.has(item.name)) send(item.call ? 'response.function_call_arguments.delta' : 'response.output_text.delta', { item_id: item.id, output_index: item.index, ...(item.call ? {} : { content_index: 0 }), delta: value });
-    else send('', chat(item.call ? { tool_calls: [{ index: item.index, function: { arguments: value } }] } : { content: value }));
+    else if(target==='chat') send('', chat(item.call ? { tool_calls: [{ index: item.index, function: { arguments: value } }] } : { content: value }));
   };
   for await (const event of sse(stream)) {
+    await flush();
+    if(event.type==='ag.done'){if(!ended)throw new ProtocolError('Upstream sent DONE without completion.');break;}
+    if (event.type === 'error' || event.error || ['response.failed','response.error'].includes(event.type)) throw new ProtocolError('Upstream generation failed. No request was replayed.');
     if (ended) {
+      if(source==='messages' && event.type==='message_stop')break;
       if(source === 'chat' && event.usage) usage={input_tokens:event.usage.prompt_tokens || 0,output_tokens:event.usage.completion_tokens || 0};
       continue;
     }
-    if (event.type === 'error' || event.error || ['response.failed','response.error'].includes(event.type)) throw new ProtocolError('Upstream generation failed. No request was replayed.');
     if (source === 'responses') {
       if (event.response?.usage) usage = event.response.usage;
       if (event.type === 'response.output_item.added' && event.item.type === 'function_call') add(event.output_index, event.item.call_id, event.item.name);
@@ -225,7 +228,7 @@ export async function translateStream(stream, source, target, model, res, tools 
         const item = items.get(event.output_index); if (!item) throw new ProtocolError('Tool arguments arrived before the tool ID.'); delta(item,event.delta);
       }
       if (['response.completed','response.incomplete'].includes(event.type)) {
-        limited = event.type === 'response.incomplete'; ended = true;
+        limited = event.type === 'response.incomplete'; incompleteDetails=event.response?.incomplete_details || null; ended = true;
         for (const [index,item] of (event.response?.output || []).entries()) {
           if (item.type === 'function_call' && !items.has(index)) delta(add(index,item.call_id,item.name),item.arguments || '{}');
           if (item.type === 'message' && !items.has(index)) delta(add(index), (item.content || []).map(x=>x.text || '').join(''));
@@ -235,6 +238,7 @@ export async function translateStream(stream, source, target, model, res, tools 
       if (event.message?.usage) usage = { ...usage, ...event.message.usage };
       if (event.usage) usage = { ...usage, ...event.usage };
       if (event.type === 'content_block_start') {
+        openBlocks.add(event.index);
         const block = event.content_block;
         if (block.type === 'tool_use') add(event.index,block.id,block.name);
         else if (block.type === 'text') { const item=add(event.index); if(block.text) delta(item,block.text); }
@@ -243,8 +247,10 @@ export async function translateStream(stream, source, target, model, res, tools 
       if (event.type === 'content_block_delta' && ['text_delta','input_json_delta'].includes(event.delta.type)) {
         const item = items.get(event.index); if (!item) throw new ProtocolError('Missing upstream content block.'); delta(item,event.delta.text ?? event.delta.partial_json);
       }
+      if(event.type==='content_block_stop')openBlocks.delete(event.index);
       if (event.delta?.stop_reason === 'max_tokens') limited = true;
-      if (event.type === 'message_stop') ended = true;
+      if (event.delta?.stop_reason && !openBlocks.size) ended=true;
+      if (event.type === 'message_stop') {ended = true;await flush();break;}
     } else {
       if (event.usage) usage = { input_tokens: event.usage.prompt_tokens || 0, output_tokens: event.usage.completion_tokens || 0 };
       const choice = event.choices?.[0];
@@ -256,6 +262,8 @@ export async function translateStream(stream, source, target, model, res, tools 
       }
       if (choice?.finish_reason) { limited = choice.finish_reason === 'length'; ended = true; }
     }
+    await flush();
+    if(source==='responses' && ended)break;
   }
   if (!ended) throw new ProtocolError('Upstream stream ended before completion. No request was replayed.');
   start();
@@ -274,7 +282,8 @@ export async function translateStream(stream, source, target, model, res, tools 
   }
   const calls = [...items.values()].some(item=>item.call);
   if (target === 'messages') { send('message_delta', { delta: { stop_reason: calls ? 'tool_use' : limited ? 'max_tokens' : 'end_turn', stop_sequence: null }, usage }); send('message_stop', {}); }
-  else if (target === 'responses') send(limited ? 'response.incomplete' : 'response.completed', { response: { ...response(limited ? 'incomplete' : 'completed'), incomplete_details: limited ? { reason: 'max_output_tokens' } : null } });
-  else { send('', chat({},calls ? 'tool_calls' : limited ? 'length' : 'stop',{ usage: { prompt_tokens: usage.input_tokens, completion_tokens: usage.output_tokens, total_tokens: usage.input_tokens+usage.output_tokens } })); res.write('data: [DONE]\n\n'); }
+  else if (target === 'responses') send(limited ? 'response.incomplete' : 'response.completed', { response: { ...response(limited ? 'incomplete' : 'completed'), incomplete_details: limited ? incompleteDetails || { reason: 'max_output_tokens' } : null } });
+  else { send('', chat({},calls ? 'tool_calls' : limited ? 'length' : 'stop',{ usage: { prompt_tokens: usage.input_tokens, completion_tokens: usage.output_tokens, total_tokens: usage.input_tokens+usage.output_tokens } })); pending.push('data: [DONE]\n\n'); }
+  await flush();
   res.end();
 }

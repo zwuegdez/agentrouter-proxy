@@ -3,11 +3,11 @@ import https from 'node:https';
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { endpointTypes, codexCatalog } from './ag-models.mjs';
+import { decodeUpstream, forwardSse, jsonSse, streamError, writeStream, HEARTBEAT_MS, STREAM_IDLE_TIMEOUT } from './ag-streams.mjs';
 import { ProtocolError, toResponses, fromResponses, translateResponse, translateStream } from './ag-protocols.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const HEADER_TIMEOUT = 60_000;
-const STREAM_IDLE_TIMEOUT = 120_000;
 const LOOPBACK = host => host === 'localhost' || host === '::1' || host === '[::1]' || (isIP(host) === 4 && host.startsWith('127.'));
 
 export function validateEndpoint(value) {
@@ -96,6 +96,8 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
     req.on('end', async () => {
       if (rejected || res.destroyed) return;
       let body = Buffer.concat(chunks), parsed, source, target, candidates = [], model;
+      const incoming = new URL(req.url,'http://localhost').pathname;
+      const protocol = /\/responses$/.test(incoming) ? 'responses' : /\/chat\/completions$/.test(incoming) ? 'chat' : /\/messages$/.test(incoming) ? 'messages' : null;
       try {
         const incoming = new URL(req.url, 'http://localhost').pathname;
         if (catalog) {
@@ -131,12 +133,25 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
       };
       try { route(); } catch (error) { reply(400, error.message); return; }
 
+      if(!catalog && protocol && req.method==='POST') {
+        try{parsed=JSON.parse(body.toString('utf8'));}catch{}
+      }
+      const streaming=parsed?.stream===true && protocol;
+      let heartbeat;
+      const beginStream=(status,responseHeaders)=>{
+        for(const name of ['content-length','content-encoding','etag'])delete responseHeaders[name];
+        res.writeHead(status,{...responseHeaders,'content-type':'text/event-stream','cache-control':'no-cache','x-accel-buffering':'no'});
+        res.flushHeaders();
+        heartbeat=setInterval(()=>{if(!res.destroyed && !res.writableEnded && !res.writableNeedDrain)res.write(': ag keepalive\n\n');},HEARTBEAT_MS);
+        heartbeat.unref();
+        res.once('close',()=>clearInterval(heartbeat));
+      };
       const headers = cleanHeaders(req.headers);
       headers.host = upstream.host;
       delete headers['x-codex-beta-features'];
       delete headers['content-length'];
       if (body.length) headers['content-length'] = String(body.length);
-      if (catalog) headers['accept-encoding'] = 'identity';
+      if (catalog || streaming) headers['accept-encoding'] = 'identity';
       if (apiKey) {
         headers.authorization = `Bearer ${apiKey}`;
         delete headers['api-key'];
@@ -146,6 +161,7 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
       let deadline;
       const fail = error => {
         clearTimeout(deadline);
+        if(streaming && res.headersSent){streamError(res,protocol,error?.code==='ETIMEDOUT' ? 'upstream_stream_timeout' : 'upstream_stream_incomplete');return;}
         reply(error?.code === 'ETIMEDOUT' ? 504 : 502, error?.code === 'ETIMEDOUT' ? 'The upstream request timed out.' : 'Could not reach the configured upstream.');
       };
       const send = () => {
@@ -164,8 +180,10 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
           clearTimeout(deadline);
           response = upRes;
           if (res.destroyed || rejected) { upRes.destroy(); return; }
-          upRes.on('error', () => res.destroy());
-          upRes.on('aborted', () => res.destroy());
+          let managedStream=false;
+          const responseFailed=()=>{if(managedStream)return;if(streaming && res.headersSent)streamError(res,protocol);else if(!res.writableEnded)res.destroy();};
+          upRes.on('error', responseFailed);
+          upRes.on('aborted', responseFailed);
           upRes.setTimeout(STREAM_IDLE_TIMEOUT, () => request.destroy(Object.assign(new Error('Upstream idle timeout.'), { code: 'ETIMEDOUT' })));
           const status = upRes.statusCode || 502;
           const translated = catalog && source !== target;
@@ -188,26 +206,39 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
             });
             return;
           }
-          if (!translated || status >= 400) {
-            res.writeHead(status, cleanHeaders(upRes.headers)); upRes.pipe(res); return;
+          const isSse=/text\/event-stream/i.test(String(upRes.headers['content-type']));
+          if(!translated && !(streaming && status<400)) {
+            res.writeHead(status,cleanHeaders(upRes.headers));upRes.pipe(res);return;
           }
-          const responseHeaders = cleanHeaders(upRes.headers);
-          for (const name of ['content-length','content-encoding','etag']) delete responseHeaders[name];
-          if (parsed.stream && /text\/event-stream/.test(String(upRes.headers['content-type']))) {
-            res.writeHead(status, { ...responseHeaders, 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-            translateStream(upRes, target, source, parsed.model, res, parsed.tools).catch(() => {
-              if (res.destroyed) return;
-              res.end('event: error\ndata: ' + JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Protocol translation failed or upstream output was incomplete. No generation was replayed.' } }) + '\n\n');
-            });
+          const responseHeaders=cleanHeaders(upRes.headers);
+          for(const name of ['content-length','content-encoding','etag'])delete responseHeaders[name];
+          if(streaming && isSse) {
+            let decoded;
+            try{decoded=decodeUpstream(upRes,upRes.headers['content-encoding']);}catch{reply(502,'Unsupported upstream stream encoding.');upRes.destroy();return;}
+            managedStream=true;
+            beginStream(status,responseHeaders);
+            const forwarding=translated ? translateStream(decoded,target,source,parsed.model,res,parsed.tools) : forwardSse(decoded,res,protocol);
+            forwarding.catch(()=>streamError(res,protocol));
           } else {
-            const parts = []; let bytes = 0;
-            upRes.on('data', chunk => { bytes += chunk.length; if (bytes > MAX_BODY) { upRes.destroy(); reply(502, 'Upstream response exceeds 32 MiB.'); } else parts.push(chunk); });
-            upRes.on('end', () => {
-              if (res.destroyed || rejected) return;
+            let decoded;
+            try{decoded=decodeUpstream(upRes,upRes.headers['content-encoding']);}catch{reply(502,'Unsupported upstream response encoding.');upRes.destroy();return;}
+            decoded.on('error',()=>reply(502,'Could not decode the upstream response.'));
+            const parts=[];let bytes=0;
+            decoded.on('data',chunk=>{bytes+=chunk.length;if(bytes>MAX_BODY){reply(502,'Upstream response exceeds 32 MiB.');upRes.destroy();}else parts.push(chunk);});
+            decoded.on('end',async()=>{
+              if(res.destroyed || rejected)return;
               try {
-                const value = translateResponse(JSON.parse(Buffer.concat(parts).toString('utf8')), target, source, parsed.model, parsed.tools);
-                res.writeHead(status, { ...responseHeaders, 'content-type': 'application/json' }); res.end(JSON.stringify(value));
-              } catch { reply(502, 'Could not translate the upstream response. No generation was replayed.'); }
+                const upstreamValue=JSON.parse(Buffer.concat(parts).toString('utf8'));
+                const value=translated ? translateResponse(upstreamValue,target,source,parsed.model,parsed.tools) : upstreamValue;
+                if(streaming) {
+                  const events=jsonSse(value,protocol);
+                  beginStream(status,responseHeaders);
+                  for(const event of events)await writeStream(res,event);
+                  res.end();
+                } else {
+                  res.writeHead(status,{...responseHeaders,'content-type':'application/json'});res.end(JSON.stringify(value));
+                }
+              }catch{if(res.headersSent)streamError(res,protocol);else reply(502,'Upstream did not return a complete compatible response. No generation was replayed.');}
             });
           }
         });

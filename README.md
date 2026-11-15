@@ -7,7 +7,7 @@
 Linux/macOS:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.1/install.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.2/install.sh | bash
 ag setup
 ```
 
@@ -16,14 +16,14 @@ Windows PowerShell:
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.1/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.2/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
 } finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
 & (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Or download the [v1.2.1 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.1.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.1` (requires Git). This is a GitHub installation; no npm registry release is required.
+Or download the [v1.2.2 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.2.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.2` (requires Git). This is a GitHub installation; no npm registry release is required.
 
 Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
 
@@ -67,6 +67,16 @@ Claude Code speaks Anthropic Messages, and OpenCode's compatible provider speaks
 
 Endpoint fallback happens only on a clear endpoint rejection (HTTP 405/501 or an explicit unsupported-endpoint error). It keeps the same model ID. It never retries quota/auth errors, a network failure, or a partially generated stream. An unavailable model triggers catalog refresh and an error; choose another model yourself. An upstream outage does not remove the enabled background service. Requests wait for working model discovery before inference resumes.
 
+## Stream disconnect fixes
+
+The shared proxy handles Responses, Anthropic Messages, and Chat Completions streams in active and foreground modes. It repairs missing final SSE separators, fills an omitted JSON event type from the SSE event name, recognizes `response.done` only when the response has an explicit terminal status, and streams complete JSON replies when a gateway ignores `stream: true`. It decompresses gzip/deflate/Brotli upstream output and respects slow-client backpressure.
+
+Keepalive comments every 15 seconds help local connections survive quiet periods; the upstream idle deadline is 10 minutes. Completion events end the local stream promptly even when an upstream Responses/Messages connection stays open. A Chat finish reason or a Messages stop reason with all content blocks closed can supply a missing final marker at clean EOF. Provider error and incomplete statuses remain errors/incomplete; a bare `[DONE]`, partial JSON, or text delta alone is never treated as a successful completion.
+
+A real network cutoff or unfinished upstream generation still fails with `upstream_stream_incomplete` or `upstream_stream_timeout`. Output already received is preserved. The proxy cannot reconstruct missing model output and does not replay generation. This fixes identifiable compatibility problems, not every cause of a disconnect.
+
+The original `--relay-only` single-file Azure workaround is preserved; use the `ag` proxy for these stream improvements.
+
 ## Storage and troubleshooting
 
 Saved setup and activation state live in `~/.local/share/agentrouter-codex-relay` (`XDG_DATA_HOME` honored), or `%LOCALAPPDATA%\AgentRouterCodexRelay` on Windows. **Saved upstream keys, local tokens, and restoration snapshots are plaintext in private files.** Unix uses mode `0600`; Windows applies user/SYSTEM/Administrators ACLs. Initial replacements keep private `.agentrouter-backup-*` files; catalog refresh avoids accumulating backups. Preserve recovery state until deactivation succeeds.
@@ -83,7 +93,7 @@ Saved setup and activation state live in `~/.local/share/agentrouter-codex-relay
 | HTTP 502/504 | Check upstream availability, network, and service logs. |
 | Configuration parse error | Correct the existing client config. Linked/non-file targets are rejected. |
 
-Linux logs: `journalctl --user -u agentrouter-proxy.service`. macOS logs: the app directory's `daemon.log`. Windows service: scheduled task `AgentRouterProxy`. Requests are limited to 32 MiB, model catalogs/errors to 4 MiB, upstream headers to 60 seconds, and idle streams to 120 seconds. Keep loopback private.
+Linux logs: `journalctl --user -u agentrouter-proxy.service`. macOS logs: the app directory's `daemon.log`. Windows service: scheduled task `AgentRouterProxy`. Requests are limited to 32 MiB, model catalogs/errors to 4 MiB, upstream headers to 60 seconds, and idle upstream streams to 10 minutes. The local stream receives a keepalive comment every 15 seconds. Keep loopback private.
 
 To update `ag`, deactivate, install the desired pinned release, then reactivate. Client updates are independent; the proxy uses published configuration/API contracts, but arbitrary future breaking changes may need a proxy update. To uninstall, deactivate first, then remove the launcher and app directory after checking keys/backups. npm: `npm uninstall --global agentrouter-proxy`. Desktop apps and CLI clients remain installed.
 
@@ -106,6 +116,8 @@ node --test
 Tests cover activation rollback/restoration, private settings, model refresh/removal, endpoint selection, Responses/Messages/Chat translation, split UTF-8 SSE, tool history/custom tool input, authentication, cancellation, timeouts, installers, and prior relay behavior. OpenCode 2.1.4 listed only the generated AgentRouter fixture models. Codex 0.169.0 app-server accepted the catalog and returned only those IDs. A real Linux user service served mock discovery, restarted after SIGKILL, and stopped/restored on deactivation.
 
 Installed Claude Code completed a GPT mock request through Messages → Responses with `CLIENT_PROXY_OK`. OpenCode accepted and restricted the provider/catalog, but its standalone generation check stalled during server startup before reaching the proxy.
+
+Installed Codex and Claude Code also completed against a mock that returned non-streaming JSON to streaming requests, each returning `CLIENT_PROXY_OK`.
 
 Native desktop UI execution, Windows/macOS service execution, and funded inference with this protocol bridge remain unverified. An account's catalog listing does not guarantee quota or operational availability.
 

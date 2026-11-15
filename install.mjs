@@ -85,7 +85,7 @@ export async function installAssistant({ app = appDirectory(), bin = process.env
   const marker = platform === 'win32' ? '@echo off\r\nrem agentrouter-proxy launcher\r\n' : '#!/bin/sh\n# agentrouter-proxy launcher\n';
   const previous = await readConfiguration(commandPath);
   if (previous !== null && !previous.startsWith(marker)) throw new Error(`Refusing to replace an unrelated ag command: ${commandPath}`);
-  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'ag-models.mjs', 'ag-protocols.mjs', 'ag-service.mjs', 'ag-activation.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
+  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'ag-models.mjs', 'ag-protocols.mjs', 'ag-streams.mjs', 'ag-service.mjs', 'ag-activation.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
   const contents = await Promise.all(files.map(file => readFile(join(SELF, file), 'utf8')));
   for (const file of files) await readConfiguration(join(app, file));
   let launcher;

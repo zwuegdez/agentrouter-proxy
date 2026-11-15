@@ -126,13 +126,13 @@ test('proxy-only launch forwards existing credentials and stops on a signal', as
 });
 
 test('CLI help needs no terminal, npm-style symlinks run correctly, and bad options fail without starting a proxy', async t => {
-  const sink = output();
+  const sink = output(),root=await directory(t);
   assert.equal(await main(['help'], { output: sink }), 0);
   assert(sink.value.includes('ag proxy'));
   await assert.rejects(main(['unknown']), /Unknown/);
   await assert.rejects(main(['proxy', '--port', '0']), /Invalid option/);
   await assert.rejects(main(['proxy', '--endpoint', 'http://remote.example']), /HTTPS/);
-  await assert.rejects(main([], { input: {}, output: sink }), /interactive terminal/);
+  await assert.rejects(main([], { input: {}, output: sink,env:{AG_APP_DIR:root} }), /interactive terminal/);
   if (process.platform !== 'win32') {
     const root = await directory(t), link = join(root, 'ag');
     await symlink(new URL('./ag.mjs', import.meta.url), link);
@@ -150,6 +150,7 @@ test('the interactive proxy menu starts a background service and returns without
   }}),0);
   assert.deepEqual(call.setup,{endpoint:'https://agentrouter.org/v1',client:'claude'});
   assert.equal(call.options.relay,true);assert.equal(call.options.port,18766);
+  assert.equal(call.options.app,join(root,'agentrouter-codex-relay'));
   assert.match(ui.questions[0].label,/Autostart and crash restart/);
   assert.match(sink.value,/ANTHROPIC_BASE_URL/);
   assert.doesNotMatch(sink.value,/Keep this terminal open/);

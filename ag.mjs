@@ -149,6 +149,7 @@ export async function launchSession({ setup, endpoint = DEFAULT_ENDPOINT, port =
 
 export async function main(args = process.argv.slice(2), { input = process.stdin, output = process.stdout, env = process.env, ui: promptUi, activation = activate } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22 or newer is required.');
+  const app=env.AG_APP_DIR || appDirectory(undefined,undefined,env),file=join(app,'ag.json');
   const command = args[0] || '';
   if (['help', '--help', '-h'].includes(command)) { output.write(HELP + '\n'); return 0; }
   if (!['', 'setup', 'start', 'proxy', 'activate', 'deactivate', 'status', 'models', 'daemon'].includes(command)) throw new Error('Unknown command. Run ag help.');
@@ -159,10 +160,10 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
     else if (args[i] === '--port' && ['start', 'proxy', 'activate'].includes(command) && /^\d+$/.test(args[i + 1] || '') && Number(args[i + 1]) >= 1 && Number(args[i + 1]) <= 65535) port = Number(args[++i]);
     else throw new Error('Invalid option. Run ag help.');
   }
-  if (command === 'deactivate') { await deactivate({ env, output }); return 0; }
-  if (command === 'daemon') return runDaemon({ output });
+  if (command === 'deactivate') { await deactivate({ app, env, output }); return 0; }
+  if (command === 'daemon') return runDaemon({ app, output });
   if (command === 'status' || command === 'models') {
-    const state = await loadActive();
+    const state = await loadActive(app);
     if (!state) { output.write('AgentRouter is inactive. Run ag activate.\n'); return command === 'models' ? 1 : 0; }
     if(command === 'models' && state.mode === 'relay')throw new Error('Proxy-only mode keeps model discovery in your existing client. Use ag setup for the AgentRouter-only catalog.');
     let response;
@@ -173,28 +174,28 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
     else output.write(`AgentRouter is active at http://127.0.0.1:${state.port}/v1. Use ag deactivate to stop.\n`);
     return 0;
   }
-  if (foreground) return launchSession(command === 'start' ? { setup: await loadSetup(), port } : { endpoint, port }, { env, output });
+  if (foreground) return launchSession(command === 'start' ? { setup: await loadSetup(file), port } : { endpoint, port }, { env, output });
   const startBackground = async session => {
     const relay=!session.setup;
-    const state=await activation(session.setup || session,{port,env,output,relay});
+    const state=await activation(session.setup || session,{app,port,env,output,relay});
     if(state?.mode === 'relay')output.write(proxyInstructions(state.setup.client || 'codex',`http://127.0.0.1:${state.port}/v1`)+'\nAuthorization comes from your existing client.\n');
     return 0;
   };
   if(['','start','activate'].includes(command)) {
-    const state=await loadActive();
+    const state=await loadActive(app);
     if(state)return startBackground(state.mode === 'relay' ? state.setup : {setup:state.setup});
   }
-  if (command === 'start' || command === 'activate') return startBackground({setup:await loadSetup()});
+  if (command === 'start' || command === 'activate') return startBackground({setup:await loadSetup(file)});
   if (command === 'proxy') return startBackground({endpoint,client:'codex'});
   const ui = promptUi || prompts(input, output);
   let session;
   try {
     const choice = command === 'setup' ? '2' : await ui.ask('1. Background proxy — I already have client credentials\n2. Guided setup — choose a client, key and endpoint\n3. Start saved setup in the background\nAutostart and crash restart are enabled; use ag deactivate to stop.\nChoice [1]: ');
     if (choice === '2') {
-      const result = await guidedSetup(ui, { env, output });
+      const result = await guidedSetup(ui, { env, file, output });
       if (!result.start) return 0;
       session = { setup: result.setup };
-    } else if (choice === '3') session = { setup: await loadSetup() };
+    } else if (choice === '3') session = { setup: await loadSetup(file) };
     else if (choice === '' || choice === '1') {
       const client = await chooseClient(ui, env);
       const selectedEndpoint = await ui.ask(`Upstream endpoint [${DEFAULT_ENDPOINT}]: `) || DEFAULT_ENDPOINT;

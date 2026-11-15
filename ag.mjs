@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { appDirectory, readConfiguration, writePrivate } from './install.mjs';
 import { createProxy, validateEndpoint } from './ag-proxy.mjs';
+import { activate, deactivate, loadActive, runDaemon } from './ag-activation.mjs';
 import { CLIENTS, clientInstalled, installClient, runClient } from './ag-clients.mjs';
 
 const DEFAULT_ENDPOINT = 'https://agentrouter.org/v1';
@@ -17,6 +18,10 @@ ag                 Choose existing setup, guided setup, or saved setup
 ag setup           Choose a client, endpoint, API key and model
 ag start           Start your saved setup
 ag proxy           Run only the proxy; keep your client's existing credentials
+ag activate        Keep AgentRouter active in the background for CLI/Desktop clients
+ag deactivate      Stop the background proxy and restore previous client settings
+ag status          Show activation status
+ag models          Show the live AgentRouter model list while active
 ag help            Show this guide
 
 ag proxy --endpoint https://agentrouter.org/v1 --port 18766
@@ -25,8 +30,12 @@ ag start --port 18766
 Setup asks before installing a missing client or saving an API key.
 Saved settings: ${join(appDirectory(), 'ag.json')}
 Keys saved here are plaintext in a private file. Replacement backups also contain keys.
-Client connections use temporary settings; existing client config is preserved.
-The proxy runs in the foreground. Press Ctrl+C to stop.
+ag start uses temporary settings. ag activate saves reversible client routing changes.
+ag start/ag proxy run in the foreground. ag activate registers an OS background service.
+Activation discovers AgentRouter models every five minutes. GPT uses Responses upstream;
+Claude/OpenCode requests are translated automatically when needed.
+Claude Desktop: import claude-desktop.json for Claude auto-discovery,
+or claude-desktop-all-models.json for GPT/all models; reimport that list after releases.
 Your endpoint must support Responses (Codex), Messages (Claude), or Chat Completions (OpenCode).
 Provider account, quota and model compatibility errors still need provider fixes.`;
 
@@ -140,12 +149,26 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22 or newer is required.');
   const command = args[0] || '';
   if (['help', '--help', '-h'].includes(command)) { output.write(HELP + '\n'); return 0; }
-  if (!['', 'setup', 'start', 'proxy'].includes(command)) throw new Error('Unknown command. Run ag help.');
+  if (!['', 'setup', 'start', 'proxy', 'activate', 'deactivate', 'status', 'models', 'daemon'].includes(command)) throw new Error('Unknown command. Run ag help.');
   let endpoint = DEFAULT_ENDPOINT, port = DEFAULT_PORT;
   for (let i = 1; i < args.length; i += 2) {
     if (args[i] === '--endpoint' && command === 'proxy' && args[i + 1]) endpoint = validateEndpoint(args[i + 1]).href.replace(/\/$/, '');
-    else if (args[i] === '--port' && ['start', 'proxy'].includes(command) && /^\d+$/.test(args[i + 1] || '') && Number(args[i + 1]) >= 1 && Number(args[i + 1]) <= 65535) port = Number(args[i + 1]);
+    else if (args[i] === '--port' && ['start', 'proxy', 'activate'].includes(command) && /^\d+$/.test(args[i + 1] || '') && Number(args[i + 1]) >= 1 && Number(args[i + 1]) <= 65535) port = Number(args[i + 1]);
     else throw new Error('Invalid option. Run ag help.');
+  }
+  if (command === 'activate') { await activate(await loadSetup(), { port, env, output }); return 0; }
+  if (command === 'deactivate') { await deactivate({ env, output }); return 0; }
+  if (command === 'daemon') return runDaemon({ output });
+  if (command === 'status' || command === 'models') {
+    const state = await loadActive();
+    if (!state) { output.write('AgentRouter is inactive. Run ag activate.\n'); return command === 'models' ? 1 : 0; }
+    let response;
+    try { response = await fetch(`http://127.0.0.1:${state.port}/${command === 'models' ? 'v1/models' : 'health'}`, { headers: { authorization: `Bearer ${state.localBearer}` }, signal: AbortSignal.timeout(20_000), redirect: 'error' }); }
+    catch { throw new Error('Activation is saved but the background proxy is unreachable. Check your OS service logs.'); }
+    if (!response.ok) throw new Error(`AgentRouter ${command} failed (HTTP ${response.status}). Check your key, quota, and service logs.`);
+    if (command === 'models') { for (const model of (await response.json()).data) output.write(model.id+'\n'); }
+    else output.write(`AgentRouter is active at http://127.0.0.1:${state.port}/v1. Use ag deactivate to stop.\n`);
+    return 0;
   }
   if (command === 'start') return launchSession({ setup: await loadSetup(), port }, { env, output });
   if (command === 'proxy') return launchSession({ endpoint, port }, { env, output });
@@ -167,7 +190,7 @@ export async function main(args = process.argv.slice(2), { input = process.stdin
   return launchSession(session, { env, output });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+if (process.argv[1] && process.argv[1] !== '-' && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try { process.exitCode = await main(); }
   catch (error) {
     console.error(error.name === 'AbortError' ? 'Setup cancelled.' : error.code === 'EADDRINUSE' ? 'Proxy port is already in use. Stop the other proxy or choose --port with ag start/ag proxy.' : error.message);

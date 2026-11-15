@@ -1,136 +1,115 @@
-# Installation and usage guide
+# AgentRouter proxy
 
-`ag` starts a local proxy for **Codex CLI, Claude Code, and OpenCode**. Choose an existing client setup, guided setup with an endpoint and API key, or your saved setup. The proxy removes stale Responses references that can cause AgentRouter's Azure resource error.
+`ag` connects Codex, Claude Code, and OpenCode to AgentRouter. It supports CLI clients and the desktop clients' provider configuration. Requires Node.js 22+, an AgentRouter API key, and access to your selected model.
 
-## Install and use ag
+## Install
 
-Requires **Node.js 22+**, a compatible provider endpoint, API key, and model. Each client uses its own protocol: Codex requires Responses, Claude requires Messages, and OpenCode requires Chat Completions. The proxy forwards those protocols; your endpoint must support the chosen client.
+Linux/macOS:
 
-### Linux, macOS, or VPS: curl
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.sh | bash
-ag help
-ag
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.0/install.sh | bash
+ag setup
 ```
 
-The installer copies the files and prints the command path. It starts no process. If `ag` is not on PATH, run:
-
-```bash
-"$HOME/.local/bin/ag" help
-"$HOME/.local/bin/ag"
-```
-
-Add `~/.local/bin` to your shell's PATH to use `ag` from any folder. For a custom bin directory, set `AG_BIN_DIR` when running the installer and use its printed path.
-
-To inspect the installer before running it:
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.sh -o install.sh
-cat install.sh
-bash install.sh
-```
-
-### Windows: PowerShell with curl
+Windows PowerShell:
 
 ```powershell
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('ag-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
 try {
-    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.1.0/install.ps1' -o $installer
+    curl.exe --proto '=https' --tlsv1.2 -fsSL 'https://raw.githubusercontent.com/zwuegdez/agentrouter-proxy/v1.2.0/install.ps1' -o $installer
     if ($LASTEXITCODE -ne 0) { throw 'Installer download failed.' }
     & $installer
-} finally {
-    Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-}
-& (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') help
-& (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd')
+} finally { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue }
+& (Join-Path $env:LOCALAPPDATA 'AgentRouterCodexRelay\ag.cmd') setup
 ```
 
-Add `%LOCALAPPDATA%\AgentRouterCodexRelay` to your user PATH to use `ag help`. If your script policy blocks the installer, use the ZIP or npm method.
+Or download the [v1.2.0 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.2.0.zip), extract it, and run `node install.mjs`. npm users can run `npm install --global github:zwuegdez/agentrouter-proxy#v1.2.0` (requires Git). This is a GitHub installation; no npm registry release is required.
 
-### ZIP, Git, or npm
+Installation starts no service and preserves existing client settings. Setup asks before installing a missing CLI client or saving a key. Desktop apps are installed separately through their official installers. If `ag` is missing from PATH, use the printed launcher path or add its directory to your user PATH.
 
-Download the [v1.1.0 ZIP](https://github.com/zwuegdez/agentrouter-proxy/archive/refs/tags/v1.1.0.zip), extract it, open its folder in a terminal, and run `node install.mjs`. You can also use `node ag.mjs help` directly from that folder.
+## Activate and deactivate
 
-With Git installed:
+Run `ag setup`, choose `https://agentrouter.org/v1`, enter your key and a current model ID, and save the setup. Then:
 
 ```sh
-git clone --branch v1.1.0 --depth 1 https://github.com/zwuegdez/agentrouter-proxy.git
-cd agentrouter-proxy
-node install.mjs
-ag help
+ag activate
+ag status
+ag models
+ag deactivate
 ```
 
-To install the command with npm from GitHub:
+`ag activate --port 18767` selects another port. Activation configures all three clients and starts a loopback-only service. It stays enabled until `ag deactivate`; closing the terminal or a client does not stop it. Linux uses a user systemd service, macOS uses a LaunchAgent, and Windows uses a scheduled task with a restart loop. Linux needs an available user systemd manager; use `loginctl enable-linger "$USER"` if you want it to start at boot and survive logout. macOS/Windows start at user login. An asleep or powered-off device cannot serve requests.
 
-```sh
-npm install --global github:zwuegdez/agentrouter-proxy#v1.1.0
-ag help
-ag
-```
+Activation validates your authenticated AgentRouter catalog before changing settings and checks that the service starts. A failed activation restores changed settings. Run one activation command at a time. If a command crashes, inspect `active.json` and the service before removing a stale `activation.lock` directory.
 
-This is a GitHub installation, not an npm registry release. npm also needs Git for this method. The client packages are installed separately, only if you accept the setup prompt.
-
-### Choose a mode
-
-| Command or menu choice | Behavior |
+| Client | After activation |
 | --- | --- |
-| `ag` | Shows all three choices. |
-| **1. Proxy only** | Choose a client and endpoint; keep its existing credentials and model. Prints routing instructions and leaves the proxy running. |
-| **2. Guided setup** or `ag setup` | Choose Codex, Claude, or OpenCode. Detects the selected client, asks before installing it, asks for endpoint/key/model, then asks about saving and starting. |
-| **3. Start saved setup** or `ag start` | Loads the setup you chose to save, starts the proxy, and launches that client. |
-| `ag proxy` | Starts only the proxy with the default AgentRouter endpoint. |
-| `ag help` | Shows commands, configuration location, and limits. |
+| Codex CLI and Codex Desktop | Restart the client/app. Uses `CODEX_HOME/config.toml` or `~/.codex/config.toml`, a Responses provider, and an AgentRouter-only model catalog. |
+| Claude Code CLI | Restart `claude`. User settings contain the local gateway, catalog model picker, and aliases for available Claude tiers. GPT selections use the Responses bridge. |
+| OpenCode CLI and Desktop | Restart the desktop app or run `opencode reload` for an existing service. Global config contains the AgentRouter provider and provider-use policy. OpenCode v1 uses its legacy schema; v2 uses `providers` and `policies`. |
+| Claude Code Desktop | Import the generated `claude-desktop.json` as described below, then relaunch. Its inference settings are separate from CLI settings. |
 
-API-key entry is hidden. You can supply `AG_API_KEY` through your existing environment instead; it is never printed or passed in command arguments. Saving is optional. When declined, the new key stays in memory for that session and existing saved settings remain available.
+Claude Desktop: **Help → Troubleshooting → Enable Developer Mode → Developer → Configure Third-Party Inference**. Choose **Import configuration**, select the file printed by `ag activate`, click **Apply Changes**, then relaunch. Keep your previous inference configuration so you can select it again after deactivation. The generated file contains a private local token, not your upstream key. Current desktop releases encrypt saved credentials using OS secure storage; `ag` supplies an import file instead of editing that internal storage. An organization's managed inference configuration may override local imports.
 
-Saved settings live at `~/.local/share/agentrouter-codex-relay/ag.json` on Unix (`XDG_DATA_HOME` is honored), or `%LOCALAPPDATA%\AgentRouterCodexRelay\ag.json` on Windows. **Saved keys are plaintext**, protected with Unix mode `0600` or Windows ACLs allowing your user, SYSTEM, and Administrators. Replacing a saved setup creates a private `ag.json.agentrouter-backup-*` file containing the old key. Keep or remove those backups deliberately.
+`claude-desktop.json` uses automatic discovery for Claude releases. Claude Desktop filters non-Claude IDs from discovery. To select GPT or every AgentRouter model there, import `claude-desktop-all-models.json` instead. This explicit list is regenerated every refresh; import it again to show newly released or removed models. The proxy enforces the live catalog either way; it never silently substitutes a retired model.
 
-Guided launches give the selected client temporary connection settings and a random local token. They preserve existing client configuration files. The proxy supplies your provider key upstream. In proxy-only mode, authorization comes from the existing client; point that client at the displayed local address and run it in a second terminal. Use guided setup if you want automatic session routing.
+`ag deactivate` stops the service and restores previous Codex, Claude CLI, and OpenCode settings. It preserves unrelated edits made while active. If you edited the same routing setting yourself, restoration preserves your new value. Restart clients or run `opencode reload`. For Claude Desktop, choose your previous inference configuration and relaunch.
 
-The default address is `http://127.0.0.1:18766/v1`. It is separate from the original relay's port `18765`. Stop with **Ctrl+C**; a guided session also stops its proxy when the client exits. No service or autostart is registered.
+A client's explicit command-line options, project config, custom config paths, or administrator policy can override global configuration. The proxy rejects model IDs outside its authenticated catalog. It cannot control a client you explicitly point at another provider.
 
-For another endpoint or an occupied port:
+## Models and endpoints
+
+While active, the proxy fetches **only authenticated AgentRouter `/v1/models`**, on startup and every five minutes. No third-party model catalog supplies selectable IDs. New releases appear automatically; removed or disabled models leave the catalog. Existing client pickers may need a reload or restart to display the refreshed list. Catalog metadata is fetched without redirects to avoid sending the key to another host.
+
+GPT models always use upstream **Responses**. Claude models prefer the client's native endpoint when AgentRouter advertises it; otherwise the proxy chooses an advertised compatible endpoint. If endpoint metadata is absent, Claude defaults to Messages, then Responses/Chat as compatible candidates. Other families default to Chat/Responses. New model IDs use these rules without a hardcoded release list.
+
+Claude Code speaks Anthropic Messages, and OpenCode's compatible provider speaks Chat Completions. The proxy translates these to Responses for GPT, including text, images, streaming, function tools, and tool-result history. Codex Responses can also translate to native Claude Messages, including Codex custom tool input. Native requests retain provider-specific fields. Translation cannot preserve every provider-specific feature: unsupported content/tools or stop sequences return an explicit error. Custom tool grammars become a string argument and their upstream grammar enforcement is lost. Hidden signed reasoning is not replayed across protocols.
+
+Endpoint fallback happens only on a clear endpoint rejection (HTTP 405/501 or an explicit unsupported-endpoint error). It keeps the same model ID. It never retries quota/auth errors, a network failure, or a partially generated stream. An unavailable model triggers catalog refresh and an error; choose another model yourself. An upstream outage does not remove the enabled background service. Requests wait for working model discovery before inference resumes.
+
+## Storage and troubleshooting
+
+Saved setup and activation state live in `~/.local/share/agentrouter-codex-relay` (`XDG_DATA_HOME` honored), or `%LOCALAPPDATA%\AgentRouterCodexRelay` on Windows. **Saved upstream keys, local tokens, and restoration snapshots are plaintext in private files.** Unix uses mode `0600`; Windows applies user/SYSTEM/Administrators ACLs. Initial replacements keep private `.agentrouter-backup-*` files; catalog refresh avoids accumulating backups. Preserve recovery state until deactivation succeeds.
+
+| Problem | Action |
+| --- | --- |
+| No saved setup | Run `ag setup` and save it. |
+| Saved model unavailable | Select a model accessible to your AgentRouter key and save the setup again. |
+| Service cannot start / occupied port | Check OS service logs; choose `ag activate --port 18767`. |
+| HTTP 401/403 | Check key and account access. |
+| HTTP 402/429 | Check provider balance, quota, and rate limits. |
+| HTTP 404 model unavailable | Refresh with `ag models`, reload the client picker, and choose an available model. |
+| HTTP 400 translation error | Use a native compatible endpoint/model or remove the unsupported feature. |
+| HTTP 502/504 | Check upstream availability, network, and service logs. |
+| Configuration parse error | Correct the existing client config. Linked/non-file targets are rejected. |
+
+Linux logs: `journalctl --user -u agentrouter-proxy.service`. macOS logs: the app directory's `daemon.log`. Windows service: scheduled task `AgentRouterProxy`. Requests are limited to 32 MiB, model catalogs/errors to 4 MiB, upstream headers to 60 seconds, and idle streams to 120 seconds. Keep loopback private.
+
+To update `ag`, deactivate, install the desired pinned release, then reactivate. Client updates are independent; the proxy uses published configuration/API contracts, but arbitrary future breaking changes may need a proxy update. To uninstall, deactivate first, then remove the launcher and app directory after checking keys/backups. npm: `npm uninstall --global agentrouter-proxy`. Desktop apps and CLI clients remain installed.
+
+## Foreground modes
+
+`ag start` launches your saved CLI setup with temporary settings and stops when that client exits. `ag proxy` forwards the existing client's credentials and prints routing instructions. Both keep the terminal open and stop with Ctrl+C; model restriction and automatic protocol selection are part of persistent activation.
 
 ```sh
+ag start
 ag proxy --endpoint https://provider.example/v1 --port 18767
-ag start --port 18767
+ag help
 ```
 
-For Claude proxy-only mode, set `ANTHROPIC_BASE_URL` to the displayed address with the final `/v1` removed. For OpenCode, set the existing provider's `baseURL` to the displayed `/v1` address. Keep the key, model, and provider SDK already working in that client. For Codex, use the provider fields shown in the original relay tutorial below with port **18766**.
-
-### Phone access, troubleshooting, updates, and removal
-
-From a phone, connect to your computer/VPS with an SSH client and run `ag` there. Both client and proxy run on that machine; the proxy remains on loopback. Keep your SSH session open or use a terminal multiplexer you already have.
-
-| Problem | What to do |
-| --- | --- |
-| `ag` not found | Run the printed full path; add its directory to PATH. For npm, check your global npm bin location. |
-| Client missing | Accept its installation prompt, or install the client yourself and reopen the terminal. Declining installs nothing. |
-| No saved setup | Run `ag setup`, or `ag proxy` for an existing client. |
-| Port already in use | Use `ag start --port 18767` or `ag proxy --port 18767`. |
-| HTTP 401/403 | Check provider key and account access. In proxy-only mode, check the key reaches the existing client. |
-| HTTP 402/429 | Check provider budget/quota/rate limits. Failed generations are not automatically retried. |
-| HTTP 502/504 | Check endpoint, DNS and upstream availability; the upstream header deadline is 60 seconds. |
-| Model or API unsupported | Choose a model and endpoint supporting the selected client's protocol. |
-| Key-saving permission error on Windows | Saving requires PowerShell to set a private ACL. Fix the stated permission problem, or decline saving and use a session only. |
-| Existing `ag` command conflict | The installer refuses to overwrite an unrelated command. Choose another bin directory or resolve that command yourself. |
-
-Requests are capped at 32 MiB; an upstream stream idle for 120 seconds is closed. The proxy strips stale references on Responses requests and preserves upstream error bodies. Removing references cannot recover hidden reasoning or fix every Azure, provider, or client error. Proxy-only mode has no independent local token check: keep it on a trusted machine.
-
-To update, run the installer URL for the version you want, or repeat npm installation with that tag. Stop active sessions before updating. The installer preserves client settings and saves backups when replacing changed files.
-
-To remove a curl/ZIP installation, stop it, remove the installed `ag` launcher, then remove the app directory after checking its contents and backups. Undo any routing edits you made for proxy-only mode. For npm use `npm uninstall --global agentrouter-proxy`; saved app settings and backups need separate removal. Client installations are separate.
-
-### Verification
+## Verification
 
 ```sh
 node --test
 ```
 
-Local tests cover setup consent, key persistence/permissions/backups, validation, installation preservation, executable launchers, forwarding, stale references, streaming, authorization, cancellation, and client session settings. Linux terminal checks verify hidden key entry and declining save/start without writes. Installed Codex CLI and OpenCode completed requests against local mock providers; the previous implementation's Claude check also reached a local mock.
+Tests cover activation rollback/restoration, private settings, model refresh/removal, endpoint selection, Responses/Messages/Chat translation, split UTF-8 SSE, tool history/custom tool input, authentication, cancellation, timeouts, installers, and prior relay behavior. OpenCode 2.1.4 listed only the generated AgentRouter fixture models. Codex 0.169.0 app-server accepted the catalog and returned only those IDs. A real Linux user service served mock discovery, restarted after SIGKILL, and stopped/restored on deactivation.
 
-Funded inference through the new assistant, long conversations, and native Windows/macOS execution remain untested. The historical live check below applies to the original `v1.0.0` relay.
+Installed Claude Code completed a GPT mock request through Messages → Responses with `CLIENT_PROXY_OK`. OpenCode accepted and restricted the provider/catalog, but its standalone generation check stalled during server startup before reaching the proxy.
+
+Native desktop UI execution, Windows/macOS service execution, and funded inference with this protocol bridge remain unverified. An account's catalog listing does not guarantee quota or operational availability.
+
+References: [Codex configuration](https://developers.openai.com/codex/config-reference/), [Claude gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol), [Claude Desktop configuration/import](https://claude.com/docs/third-party/claude-desktop/in-app-configuration), [OpenCode policies](https://opencode.ai/docs/policies).
 
 ## Original Codex relay tutorial (v1.0.0)
 

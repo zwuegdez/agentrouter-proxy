@@ -2,6 +2,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
+import { endpointTypes, codexCatalog } from './ag-models.mjs';
+import { ProtocolError, toResponses, fromResponses, translateResponse, translateStream } from './ag-protocols.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const HEADER_TIMEOUT = 60_000;
@@ -58,7 +60,7 @@ function matchesToken(value, expected) {
   return provided.length === wanted.length && timingSafeEqual(provided, wanted);
 }
 
-export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = '', localBearer = '', port = 18766 } = {}) {
+export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = '', localBearer = '', port = 18766, catalog = null } = {}) {
   const upstream = validateEndpoint(endpoint);
   for (const [name, value] of [['API key', apiKey], ['local bearer', localBearer]]) {
     if (typeof value !== 'string' || /[\x00-\x1f\x7f]/.test(value)) throw new Error(`Invalid ${name}.`);
@@ -91,17 +93,50 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
       if (size > MAX_BODY) { chunks.length = 0; reply(413, 'Request exceeds the 32 MiB proxy limit.'); return; }
       chunks.push(chunk);
     });
-    req.on('end', () => {
+    req.on('end', async () => {
       if (rejected || res.destroyed) return;
-      let body = Buffer.concat(chunks);
-      if (req.method === 'POST' && /\/responses(?:\?|$)/.test(path) && body.length) {
-        try { body = Buffer.from(JSON.stringify(stripStaleRefs(JSON.parse(body.toString('utf8'))))); } catch { /* Preserve non-JSON request bytes. */ }
-      }
+      let body = Buffer.concat(chunks), parsed, source, target, candidates = [], model;
+      try {
+        const incoming = new URL(req.url, 'http://localhost').pathname;
+        if (catalog) {
+          if (req.method === 'GET' && ['/health', '/v1/health'].includes(incoming)) {
+            res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ active: true })); return;
+          }
+          if (req.method === 'GET' && ['/models', '/v1/models', '/codex/models'].includes(incoming)) {
+            const models = await catalog.refresh();
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(incoming === '/codex/models' ? codexCatalog(models) : { object: 'list', data: models, has_more: false, first_id: models[0]?.id, last_id: models.at(-1)?.id })); return;
+          }
+          source = /\/responses$/.test(incoming) ? 'responses' : /\/chat\/completions$/.test(incoming) ? 'chat' : /\/messages(?:\/count_tokens)?$/.test(incoming) ? 'messages' : null;
+          if (req.method !== 'POST' || !source) { reply(404, 'Only AgentRouter model discovery and inference endpoints are available while active.'); return; }
+          parsed = JSON.parse(body.toString('utf8'));
+          model = await catalog.find(parsed.model);
+          if (!model) { reply(404, `Model ${String(parsed.model).slice(0,200)} is unavailable in your AgentRouter catalog. Choose an available model; no model was substituted.`); return; }
+          candidates = endpointTypes(model);
+          if (/count_tokens$/.test(incoming)) {
+            if (!candidates.includes('messages')) { reply(501, 'Native token counting is unavailable for this model.'); return; }
+            target = source;
+          } else target = candidates.includes(source) ? source : candidates[0];
+          candidates = [target, ...candidates.filter(type => type !== target)];
+          if (source === 'responses') parsed = stripStaleRefs(parsed);
+        } else if (req.method === 'POST' && /\/responses(?:\?|$)/.test(path) && body.length) {
+          try { body = Buffer.from(JSON.stringify(stripStaleRefs(JSON.parse(body.toString('utf8'))))); } catch { /* Preserve non-JSON request bytes. */ }
+        }
+      } catch (error) { reply(error instanceof SyntaxError ? 400 : 503, error instanceof SyntaxError ? 'The request must contain valid JSON.' : error.message); return; }
+      const route = () => {
+        if (!catalog) return;
+        const value = source === target ? parsed : fromResponses(toResponses(parsed, source), target);
+        body = Buffer.from(JSON.stringify(value));
+        if (!/count_tokens(?:\?|$)/.test(path)) path = upstreamPath(upstream, '/v1/' + ({ responses: 'responses', messages: 'messages', chat: 'chat/completions' })[target] + new URL(req.url,'http://localhost').search);
+      };
+      try { route(); } catch (error) { reply(400, error.message); return; }
+
       const headers = cleanHeaders(req.headers);
       headers.host = upstream.host;
       delete headers['x-codex-beta-features'];
       delete headers['content-length'];
       if (body.length) headers['content-length'] = String(body.length);
+      if (catalog) headers['accept-encoding'] = 'identity';
       if (apiKey) {
         headers.authorization = `Bearer ${apiKey}`;
         delete headers['api-key'];
@@ -113,7 +148,17 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
         clearTimeout(deadline);
         reply(error?.code === 'ETIMEDOUT' ? 504 : 502, error?.code === 'ETIMEDOUT' ? 'The upstream request timed out.' : 'Could not reach the configured upstream.');
       };
-      try {
+      const send = () => {
+        if (res.destroyed || rejected) return;
+        try {
+        route();
+        if (catalog) headers['content-type'] = 'application/json';
+        if (body.length) headers['content-length'] = String(body.length);
+        if (apiKey && catalog) {
+          delete headers['x-api-key'];
+          if (target === 'messages') headers['x-api-key'] = apiKey;
+        }
+        if (target === 'messages' && !headers['anthropic-version']) headers['anthropic-version'] = '2023-06-01';
         const transport = upstream.protocol === 'http:' ? http : https;
         request = transport.request({ hostname: upstream.hostname.replace(/^\[|\]$/g, ''), port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), path, method: req.method, headers }, upRes => {
           clearTimeout(deadline);
@@ -122,14 +167,57 @@ export function createProxy({ endpoint = 'https://agentrouter.org/v1', apiKey = 
           upRes.on('error', () => res.destroy());
           upRes.on('aborted', () => res.destroy());
           upRes.setTimeout(STREAM_IDLE_TIMEOUT, () => request.destroy(Object.assign(new Error('Upstream idle timeout.'), { code: 'ETIMEDOUT' })));
-          res.writeHead(upRes.statusCode || 502, cleanHeaders(upRes.headers));
-          upRes.pipe(res);
+          const status = upRes.statusCode || 502;
+          const translated = catalog && source !== target;
+          if (catalog && status >= 400) {
+            const parts = []; let bytes = 0;
+            upRes.on('data', chunk => {
+              bytes += chunk.length;
+              if (bytes > 4 * 1024 * 1024) { upRes.destroy(); reply(502, 'Upstream error exceeds 4 MiB.'); }
+              else parts.push(chunk);
+            });
+            upRes.on('end', () => {
+              if (res.destroyed || rejected) return;
+              const raw = Buffer.concat(parts), message = raw.toString('utf8');
+              const mismatch = [405, 501].includes(status) || [400,404].includes(status) && /unsupported[_ -](?:endpoint|api)|endpoint.{0,30}(?:unsupported|not supported)|cannot (?:post|get)|route not found/i.test(message);
+              if (mismatch && candidates.length > 1 && !/count_tokens(?:\?|$)/.test(path)) {
+                candidates.shift(); target = candidates[0]; send(); return;
+              }
+              if (status === 404 || /model[_ -]not[_ -]found|model.{0,40}unavailable/i.test(message)) catalog.refresh(true).catch(() => {});
+              res.writeHead(status, cleanHeaders(upRes.headers)); res.end(raw);
+            });
+            return;
+          }
+          if (!translated || status >= 400) {
+            res.writeHead(status, cleanHeaders(upRes.headers)); upRes.pipe(res); return;
+          }
+          const responseHeaders = cleanHeaders(upRes.headers);
+          for (const name of ['content-length','content-encoding','etag']) delete responseHeaders[name];
+          if (parsed.stream && /text\/event-stream/.test(String(upRes.headers['content-type']))) {
+            res.writeHead(status, { ...responseHeaders, 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+            translateStream(upRes, target, source, parsed.model, res, parsed.tools).catch(() => {
+              if (res.destroyed) return;
+              res.end('event: error\ndata: ' + JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Protocol translation failed or upstream output was incomplete. No generation was replayed.' } }) + '\n\n');
+            });
+          } else {
+            const parts = []; let bytes = 0;
+            upRes.on('data', chunk => { bytes += chunk.length; if (bytes > MAX_BODY) { upRes.destroy(); reply(502, 'Upstream response exceeds 32 MiB.'); } else parts.push(chunk); });
+            upRes.on('end', () => {
+              if (res.destroyed || rejected) return;
+              try {
+                const value = translateResponse(JSON.parse(Buffer.concat(parts).toString('utf8')), target, source, parsed.model, parsed.tools);
+                res.writeHead(status, { ...responseHeaders, 'content-type': 'application/json' }); res.end(JSON.stringify(value));
+              } catch { reply(502, 'Could not translate the upstream response. No generation was replayed.'); }
+            });
+          }
         });
         request.on('error', fail);
         deadline = setTimeout(() => request.destroy(Object.assign(new Error('Upstream header timeout.'), { code: 'ETIMEDOUT' })), HEADER_TIMEOUT);
         deadline.unref();
         request.end(body);
-      } catch { fail(); }
+      } catch (error) { if (error instanceof ProtocolError) reply(400,error.message); else fail(); }
+      };
+      send();
       res.on('close', () => clearTimeout(deadline));
     });
   });

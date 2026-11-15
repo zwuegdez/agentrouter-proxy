@@ -63,7 +63,7 @@ test('assistant installation copies its complete runtime, preserves settings and
   await mkdir(app);
   await writeFile(join(app, 'settings.json'), '{"existing":true}');
   const result = await installAssistant({ app, bin });
-  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
+  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'ag-models.mjs', 'ag-protocols.mjs', 'ag-service.mjs', 'ag-activation.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
   for (const file of files) assert.equal(await readFile(join(app, file), 'utf8'), await readFile(new URL(file, import.meta.url), 'utf8'));
   assert.equal(await readFile(join(app, 'settings.json'), 'utf8'), '{"existing":true}');
   await installAssistant({ app, bin });

@@ -51,13 +51,13 @@ Set-Acl -LiteralPath $env:AG_PRIVATE_PATH -AclObject $acl`;
   } catch { throw new Error('Could not restrict Windows file permissions. Check PowerShell availability and directory access.'); }
 }
 
-export async function writePrivate(path, value) {
+export async function writePrivate(path, value, { backup = true } = {}) {
   await safeDirectory(dirname(path));
   const previous = await readConfiguration(path);
   await privateWindowsPath(dirname(path), true);
   if (previous !== null) await privateWindowsPath(path);
   if (previous === value) { await chmod(path, 0o600); return; }
-  if (previous !== null) await writeFile(`${path}.agentrouter-backup-${randomUUID()}`, previous, { mode: 0o600, flag: 'wx' });
+  if (previous !== null && backup) await writeFile(`${path}.agentrouter-backup-${randomUUID()}`, previous, { mode: 0o600, flag: 'wx' });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, value, { mode: 0o600, flag: 'wx' });
@@ -85,7 +85,7 @@ export async function installAssistant({ app = appDirectory(), bin = process.env
   const marker = platform === 'win32' ? '@echo off\r\nrem agentrouter-proxy launcher\r\n' : '#!/bin/sh\n# agentrouter-proxy launcher\n';
   const previous = await readConfiguration(commandPath);
   if (previous !== null && !previous.startsWith(marker)) throw new Error(`Refusing to replace an unrelated ag command: ${commandPath}`);
-  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
+  const files = ['ag.mjs', 'ag-clients.mjs', 'ag-proxy.mjs', 'ag-models.mjs', 'ag-protocols.mjs', 'ag-service.mjs', 'ag-activation.mjs', 'install.mjs', 'agentrouter-coding-proxy.mjs'];
   const contents = await Promise.all(files.map(file => readFile(join(SELF, file), 'utf8')));
   for (const file of files) await readConfiguration(join(app, file));
   let launcher;
